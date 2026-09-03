@@ -1,6 +1,6 @@
 {
-  "version": "2.4.2",
-  "installer_url": "https://github.com/Nikoheld/TypeHack/releases/download/v2.4.2/TypeHack-Setup-2.4.2.exe",
-  "sha256": "49a8866549bd3e718f10470b5ace9986cabac2aa1ffef42228f44b69cd4f21ff",
-  "notes": "Read #text_todo_1; empty spans are spaces; layout-independent glyphs."
+  "version": "2.4.3",
+  "installer_url": "https://github.com/Nikoheld/TypeHack/releases/download/v2.4.3/TypeHack-Setup-2.4.3.exe",
+  "sha256": "01fecc3387b3e385cab6c02135fd422f9e87d189b2a6185c08da4f614ad3b73e",
+  "notes": "send_keys into #text_todo_1 so typing registers; reload captcha tab after 2s."
 }

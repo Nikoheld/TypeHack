@@ -34,7 +34,7 @@ def app_dir() -> Path:
 BASE_DIR = app_dir()
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 CONFIG_FILE = BASE_DIR / "config.json"
-VERSION = "2.4.2"
+VERSION = "2.4.3"
 
 PRESET_URLS = {
     "Österreich (at4)": "https://at4.typewriter.at",
@@ -548,62 +548,68 @@ def focus_typer(driver) -> None:
         pass
 
 
-def type_char(driver, ch: str) -> None:
-    """Insert this glyph as-is. No physical KeyY/KeyZ — those remap on QWERTZ/AZERTY."""
-    info = glyph_payload(ch)
-    text = info["insert_text"]
+CAPTCHA_RELOAD_S = 2.0
+_CAPTCHA_MARKERS = (
+    "sicherheitsprüfung",
+    "sicherheitspruefung",
+    "chal-form",
+    "id=\"chal-form\"",
+    "altcha",
+    "i'm not a robot",
+    "ich bin kein roboter",
+    "einen moment bitte",
+    "/_chal/",
+    "verification failed",
+)
+
+
+def is_captcha_view(html: str, url: str = "") -> bool:
+    """True only for the challenge screen — not login, not the lesson."""
+    blob = f"{url}\n{html}".lower()
+    if "loginform" in blob or "login-form" in blob or 'id="text_todo' in blob or "id='text_todo" in blob:
+        return False
+    return any(marker in blob for marker in _CAPTCHA_MARKERS)
+
+
+def should_reload_captcha(*, captcha: bool, elapsed_s: float, threshold_s: float = CAPTCHA_RELOAD_S) -> bool:
+    return bool(captcha) and float(elapsed_s) >= float(threshold_s)
+
+
+def maybe_reload_stuck_captcha(driver, seen_since: float | None, now: float | None = None) -> float | None:
+    """If the captcha/challenge view has been up for 2s, refresh the tab. Returns new seen_since."""
+    now = time.time() if now is None else now
     try:
-        # Key events first: typewriter.at reads keydown/keypress (insertText would skip them).
-        driver.execute_cdp_cmd(
-            "Input.dispatchKeyEvent",
-            {
-                "type": "keyDown",
-                "key": info["key"],
-                "code": info["code"],
-                "text": info["text"],
-                "unmodifiedText": info["text"],
-                "windowsVirtualKeyCode": info["vk"],
-                "nativeVirtualKeyCode": info["vk"],
-            },
-        )
-        driver.execute_cdp_cmd(
-            "Input.dispatchKeyEvent",
-            {"type": "char", "text": info["text"], "unmodifiedText": info["text"]},
-        )
-        driver.execute_cdp_cmd(
-            "Input.dispatchKeyEvent",
-            {
-                "type": "keyUp",
-                "key": info["key"],
-                "code": info["code"],
-                "windowsVirtualKeyCode": info["vk"],
-            },
-        )
-        return
+        url = driver.current_url or ""
+        html = driver.page_source or ""
     except Exception:
-        pass
-    try:
-        driver.execute_cdp_cmd("Input.insertText", {"text": text})
-        return
-    except Exception:
-        pass
+        return seen_since
+    if not is_captcha_view(html, url):
+        return None
+    if seen_since is None:
+        return now
+    if not should_reload_captcha(captcha=True, elapsed_s=now - seen_since):
+        return seen_since
+    driver.refresh()
+    return now
+
+
+def send_glyph(driver, glyph: str) -> None:
+    """Hand the character to the lesson via send_keys — CDP key events never reach typewriter.at."""
     from selenium.webdriver.common.action_chains import ActionChains
 
+    glyph = keys_for_char(glyph)
     try:
-        driver.execute_script(
-            "var ch=arguments[0];"
-            "var kc=ch===' '?32:ch.charCodeAt(0);"
-            "var t=document.activeElement||document.body;"
-            "var o={key:ch,code:'',keyCode:kc,which:kc,charCode:kc,bubbles:true,cancelable:true};"
-            "t.dispatchEvent(new KeyboardEvent('keydown',o));"
-            "t.dispatchEvent(new KeyboardEvent('keypress',o));"
-            "document.dispatchEvent(new KeyboardEvent('keydown',o));"
-            "document.dispatchEvent(new KeyboardEvent('keypress',o));",
-            text,
-        )
+        box = driver.find_element(By.ID, "text_todo_1")
+        box.send_keys(glyph)
+        return
     except Exception:
         pass
-    ActionChains(driver).send_keys(text).perform()
+    ActionChains(driver).send_keys(glyph).perform()
+
+
+def type_char(driver, ch: str) -> None:
+    """One remaining glyph as a real character. Layout-independent: send the glyph, not KeyY/KeyZ."""
+    send_glyph(driver, keys_for_char(ch))
 
 
 def _stealth(options) -> None:
@@ -1062,7 +1068,12 @@ class TypeHackApp:
         deadline = time.time() + timeout
         submitted = False
         last_note = ""
+        captcha_since: float | None = None
         while time.time() < deadline:
+            prev = captcha_since
+            captcha_since = maybe_reload_stuck_captcha(self.driver, captcha_since)
+            if prev is not None and captcha_since is not None and captcha_since != prev:
+                self.set_status("Captcha-Tab neu geladen…")
             dismiss_overlays(self.driver)
             if logged_in_markers(self.driver):
                 self.set_status("Eingeloggt.")
@@ -1114,7 +1125,9 @@ class TypeHackApp:
     def start_typing(self) -> None:
         try:
             focus_typer(self.driver)
+            captcha_since: float | None = None
             while not self.stop_flag.is_set():
+                captcha_since = maybe_reload_stuck_captcha(self.driver, captcha_since)
                 cfg = self.current_config()
                 try:
                     language_text = prompt_text(self.driver, timeout=float(cfg.get("prompt_timeout_s") or 8))

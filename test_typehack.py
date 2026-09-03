@@ -213,7 +213,7 @@ class GlyphSendTests(unittest.TestCase):
             info = th.glyph_payload(ch)
             want = " " if ch in (" ", "\xa0") else ch
             self.assertEqual(info["insert_text"], want)
-            self.assertEqual(info["text"].replace("\r", "\n") if want == "\n" else info["insert_text"], want)
+            self.assertEqual(th.keys_for_char(ch), want)
             self.assertFalse(
                 (info.get("code") or "").startswith("Key"),
                 f"{ch!r} must not use physical Key* (QWERTZ remaps y/z)",
@@ -231,22 +231,106 @@ class GlyphSendTests(unittest.TestCase):
         self.assertEqual(z["vk"], 0)
 
     def test_start_typing_emits_remaining_in_order(self):
-        remaining = th.extract_prompt_from_html(PromptExtractTests.DONE_PREFIX)
+        remaining = th.extract_prompt_from_html(PromptExtractTests.TODO_LINE)
         sent = th.glyphs_to_type(remaining)
-        self.assertEqual(sent, ["l", " ", "ö"])
-        self.assertNotIn("H", sent)
-        self.assertNotIn("a", sent)
+        self.assertEqual(sent, list("Hallo Welt ö"))
+        self.assertIn(" ", sent)
+        self.assertIn("ö", sent)
 
-    def test_type_char_uses_glyph_payload(self):
+    def test_type_char_send_keys_the_glyph_not_cdp(self):
         import inspect
 
+        class Box:
+            def __init__(self):
+                self.got = []
+
+            def send_keys(self, glyph):
+                self.got.append(glyph)
+
+        class Driver:
+            def __init__(self):
+                self.box = Box()
+
+            def find_element(self, by, value):
+                self.by, self.value = by, value
+                return self.box
+
+            def execute_cdp_cmd(self, *_a, **_k):
+                raise AssertionError("CDP must not be the primary send")
+
+        driver = Driver()
+        remaining = th.extract_prompt_from_html(
+            '<div id="text_todo_1"><span>l</span><span></span><span>ö</span></div>'
+        )
+        for ch in th.glyphs_to_type(remaining):
+            th.type_char(driver, ch)
+        self.assertEqual(driver.box.got, ["l", " ", "ö"])
+        self.assertEqual(driver.value, "text_todo_1")
         src = inspect.getsource(th.type_char)
-        self.assertIn("glyph_payload", src)
-        self.assertIn("Input.insertText", src)
-        self.assertNotIn("Key{ch.upper()}", src)
+        self.assertIn("send_glyph", src)
+        send_src = inspect.getsource(th.send_glyph)
+        self.assertIn("send_keys", send_src)
+        self.assertNotIn("execute_cdp_cmd", send_src)
         typing_src = inspect.getsource(th.TypeHackApp.start_typing)
         self.assertIn("glyphs_to_type", typing_src)
-        self.assertIn("prompt_text", typing_src)
+        self.assertIn("type_char", typing_src)
+
+
+class CaptchaReloadTests(unittest.TestCase):
+    CHAL = (
+        "<html><form id='chal-form'><h1>Einen Moment bitte — Sicherheitsprüfung</h1>"
+        "<p>I'm not a robot</p></form></html>"
+    )
+    LOGIN = '<form id="login-form"><input id="LoginForm_username" name="LoginForm[username]"></form>'
+    TODO = '<div id="text_todo_1"><span>a</span><span></span><span>b</span></div>'
+
+    def test_reload_only_after_two_seconds_on_captcha(self):
+        self.assertTrue(th.is_captcha_view(self.CHAL, "https://at4.typewriter.at/_chal/x"))
+        self.assertFalse(th.should_reload_captcha(captcha=True, elapsed_s=1.9))
+        self.assertTrue(th.should_reload_captcha(captcha=True, elapsed_s=2.0))
+        self.assertTrue(th.should_reload_captcha(captcha=True, elapsed_s=2.5))
+
+    def test_never_reload_login_or_lesson(self):
+        self.assertFalse(th.is_captcha_view(self.LOGIN, "https://at4.typewriter.at/index.php?r=site/login"))
+        self.assertFalse(th.is_captcha_view(self.TODO, "https://at4.typewriter.at/index.php?r=typewriter/runLevel"))
+        self.assertFalse(th.should_reload_captcha(captcha=False, elapsed_s=10))
+
+    def test_maybe_reload_calls_refresh_only_when_due(self):
+        class Driver:
+            def __init__(self, html, url):
+                self.page_source = html
+                self.current_url = url
+                self.refreshes = 0
+
+            def refresh(self):
+                self.refreshes += 1
+
+        chal = Driver(self.CHAL, "https://at4.typewriter.at/_chal/")
+        t0 = 100.0
+        seen = th.maybe_reload_stuck_captcha(chal, None, now=t0)
+        self.assertEqual(chal.refreshes, 0)
+        seen = th.maybe_reload_stuck_captcha(chal, seen, now=t0 + 1.9)
+        self.assertEqual(chal.refreshes, 0)
+        th.maybe_reload_stuck_captcha(chal, seen, now=t0 + 2.0)
+        self.assertEqual(chal.refreshes, 1)
+
+        login = Driver(self.LOGIN, "https://at4.typewriter.at/index.php?r=site/login")
+        self.assertIsNone(th.maybe_reload_stuck_captcha(login, t0, now=t0 + 10))
+        self.assertEqual(login.refreshes, 0)
+
+        lesson = Driver(self.TODO, "https://at4.typewriter.at/index.php?r=typewriter/runLevel")
+        self.assertIsNone(th.maybe_reload_stuck_captcha(lesson, t0, now=t0 + 10))
+        self.assertEqual(lesson.refreshes, 0)
+
+    def test_login_and_typing_use_captcha_reload_helper(self):
+        import inspect
+
+        login_src = inspect.getsource(th.TypeHackApp.login)
+        typing_src = inspect.getsource(th.TypeHackApp.start_typing)
+        self.assertIn("maybe_reload_stuck_captcha", login_src)
+        self.assertIn("maybe_reload_stuck_captcha", typing_src)
+        reload_src = inspect.getsource(th.pass_altcha_then_reload)
+        self.assertNotIn("driver.refresh", reload_src)
 
 
 class UpdaterTests(unittest.TestCase):
