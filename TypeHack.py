@@ -34,7 +34,7 @@ def app_dir() -> Path:
 BASE_DIR = app_dir()
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 CONFIG_FILE = BASE_DIR / "config.json"
-VERSION = "2.4.3"
+VERSION = "2.4.4"
 
 PRESET_URLS = {
     "Österreich (at4)": "https://at4.typewriter.at",
@@ -594,14 +594,16 @@ def maybe_reload_stuck_captcha(driver, seen_since: float | None, now: float | No
 
 
 def send_glyph(driver, glyph: str) -> None:
-    """Hand the character to the lesson via send_keys — CDP key events never reach typewriter.at."""
+    """Deliver the glyph at document level. #text_todo_1 is not an input — send_keys on it is a no-op."""
     from selenium.webdriver.common.action_chains import ActionChains
 
     glyph = keys_for_char(glyph)
     try:
         box = driver.find_element(By.ID, "text_todo_1")
-        box.send_keys(glyph)
-        return
+        try:
+            box.click()
+        except Exception:
+            pass
     except Exception:
         pass
     ActionChains(driver).send_keys(glyph).perform()

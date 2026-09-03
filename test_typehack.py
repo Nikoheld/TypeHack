@@ -239,38 +239,51 @@ class GlyphSendTests(unittest.TestCase):
 
     def test_type_char_send_keys_the_glyph_not_cdp(self):
         import inspect
+        from unittest import mock
 
         class Box:
-            def __init__(self):
-                self.got = []
+            def click(self):
+                self.clicked = True
 
             def send_keys(self, glyph):
-                self.got.append(glyph)
+                raise AssertionError("do not send_keys only on the non-editable box")
 
         class Driver:
-            def __init__(self):
-                self.box = Box()
-
             def find_element(self, by, value):
-                self.by, self.value = by, value
-                return self.box
+                self.value = value
+                return Box()
 
             def execute_cdp_cmd(self, *_a, **_k):
                 raise AssertionError("CDP must not be the primary send")
+
+        sent = []
+
+        class FakeChains:
+            def __init__(self, driver):
+                self.driver = driver
+
+            def send_keys(self, glyph):
+                sent.append(glyph)
+                return self
+
+            def perform(self):
+                return None
 
         driver = Driver()
         remaining = th.extract_prompt_from_html(
             '<div id="text_todo_1"><span>l</span><span></span><span>ö</span></div>'
         )
-        for ch in th.glyphs_to_type(remaining):
-            th.type_char(driver, ch)
-        self.assertEqual(driver.box.got, ["l", " ", "ö"])
-        self.assertEqual(driver.value, "text_todo_1")
+        with mock.patch("selenium.webdriver.common.action_chains.ActionChains", FakeChains):
+            for ch in th.glyphs_to_type(remaining):
+                th.type_char(driver, ch)
+        self.assertEqual(sent, ["l", " ", "ö"])
         src = inspect.getsource(th.type_char)
         self.assertIn("send_glyph", src)
         send_src = inspect.getsource(th.send_glyph)
+        self.assertIn("ActionChains", send_src)
         self.assertIn("send_keys", send_src)
         self.assertNotIn("execute_cdp_cmd", send_src)
+        self.assertNotIn("return", send_src.split("box.send_keys")[-1] if "box.send_keys" in send_src else send_src)
         typing_src = inspect.getsource(th.TypeHackApp.start_typing)
         self.assertIn("glyphs_to_type", typing_src)
         self.assertIn("type_char", typing_src)
