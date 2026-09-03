@@ -8,6 +8,7 @@ import random
 import sys
 import threading
 import time
+from html.parser import HTMLParser
 from pathlib import Path
 
 import updater
@@ -33,7 +34,7 @@ def app_dir() -> Path:
 BASE_DIR = app_dir()
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 CONFIG_FILE = BASE_DIR / "config.json"
-VERSION = "2.4.0"
+VERSION = "2.4.1"
 
 PRESET_URLS = {
     "Österreich (at4)": "https://at4.typewriter.at",
@@ -107,10 +108,13 @@ PROMPT_SELECTORS = [
     (By.CSS_SELECTOR, "#typewriter-text"),
     (By.CSS_SELECTOR, ".typewriter-text"),
     (By.CSS_SELECTOR, "#textToType"),
-    (By.CSS_SELECTOR, ".current-line"),
+    (By.CSS_SELECTOR, "#tw-text"),
+    (By.CSS_SELECTOR, "#twText"),
     (By.CSS_SELECTOR, ".tw-text"),
-    (By.CSS_SELECTOR, "span.letter, span.char"),
-    (By.XPATH, "/html/body/div[5]/div[2]/div[3]/div[2]/div[2]/span[1]"),
+    (By.CSS_SELECTOR, ".typewriter-line"),
+    (By.CSS_SELECTOR, ".current-line"),
+    (By.CSS_SELECTOR, "[data-prompt]"),
+    (By.CSS_SELECTOR, ".letter, .char, span.letter, span.char"),
 ]
 
 PALETTE = {
@@ -291,63 +295,198 @@ def logged_in_markers(driver) -> bool:
     return False
 
 
+# Spans already accepted/rejected by typewriter.at — never replay these.
+_DONE_HINTS = (
+    "done",
+    "typed",
+    "correct",
+    "ok",
+    "past",
+    "completed",
+    "right",
+    "hit",
+    "success",
+    "written",
+    "already",
+    "error",
+    "wrong",
+    "false",
+    "miss",
+)
+_SPACE_HINTS = ("space", "blank", "gap", "nbsp", "whitespace", "word-sep", "wordsep", "word_sep")
+_SKIP_TAGS = {"script", "style", "noscript", "svg"}
+
+
 def normalize_prompt_text(raw: str) -> str:
-    return (raw or "").replace("\xa0", " ").replace("\u202f", " ").replace("\t", " ")
+    text = raw or ""
+    for src in ("\xa0", "\u202f", "\u2002", "\u2003", "\u2009", "\t"):
+        text = text.replace(src, " ")
+    return text.replace("\n", "").replace("\r", "")
 
 
 def keys_for_char(ch: str):
-    if ch in (" ", "\xa0", "\u202f"):
-        return Keys.SPACE
+    """Glyph identity (layout-independent). Space is the character ' ', not a scan code."""
+    if ch in (" ", "\xa0", "\u202f", "\u2009"):
+        return " "
     if ch in ("\n", "\r"):
-        return Keys.RETURN
+        return "\n"
     return ch
 
 
-EXTRACT_PROMPT_JS = r"""
-var root = arguments[0];
-function vis(el) {
-  if (!el || el.nodeType !== 1) return true;
-  var st = window.getComputedStyle(el);
-  if (!st) return true;
-  if (st.display === 'none' || st.visibility === 'hidden') return false;
-  return true;
-}
-function spacey(el) {
-  var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
-  if (/space|blank|gap|nbsp|whitespace|word-?sep/.test(cls)) return true;
-  var html = el.innerHTML || '';
-  var t = el.textContent || '';
-  if (/&nbsp;|&#160;|&#xa0;/i.test(html) && t.replace(/\s/g, '') === '') return true;
-  if (t === '\u00a0' || t === '\u202f' || t === '\u2002' || t === '\u2003' || t === '\u2009') return true;
-  if ((t === '' || t === ' ') && el.children.length === 0 && el.offsetWidth >= 4) return true;
-  return false;
-}
-var out = [];
-function walk(node) {
-  if (!node) return;
-  if (node.nodeType === 3) { out.push(node.nodeValue); return; }
-  if (node.nodeType !== 1) return;
-  if (!vis(node)) return;
-  if (spacey(node) && node.childElementCount === 0) { out.push(' '); return; }
-  var kids = node.childNodes;
-  if (!kids.length) { out.push(node.textContent || ''); return; }
-  for (var i = 0; i < kids.length; i++) walk(kids[i]);
-}
-walk(root);
-return out.join('');
-"""
+def _attr_blob(attrs) -> str:
+    data = {str(k).lower(): str(v or "") for k, v in attrs}
+    return f"{data.get('class', '')} {data.get('id', '')} {data.get('data-type', '')} {data.get('data-kind', '')}".lower()
+
+
+def _token_match(blob: str, hints: tuple[str, ...]) -> bool:
+    parts = set(blob.replace("_", "-").replace(",", " ").split())
+    for hint in hints:
+        for part in parts:
+            if part == hint or part.startswith(hint + "-") or part.endswith("-" + hint):
+                return True
+    return False
+
+
+class _PromptParser(HTMLParser):
+    """Walk typewriter markup → remaining glyphs, including Abstände, skipping completed spans."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.skip = 0
+        self.spacey_stack: list[bool] = []
+        self.had_data_stack: list[bool] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        tag = (tag or "").lower()
+        if tag in _SKIP_TAGS:
+            self.skip += 1
+            self.spacey_stack.append(False)
+            self.had_data_stack.append(True)
+            return
+        blob = _attr_blob(attrs)
+        if self.skip or _token_match(blob, _DONE_HINTS):
+            self.skip += 1
+            self.spacey_stack.append(False)
+            self.had_data_stack.append(True)
+            return
+        spacey = _token_match(blob, _SPACE_HINTS)
+        self.spacey_stack.append(spacey)
+        self.had_data_stack.append(False)
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self.spacey_stack:
+            return
+        spacey = self.spacey_stack.pop()
+        had = self.had_data_stack.pop()
+        if self.skip:
+            self.skip = max(0, self.skip - 1)
+            return
+        if spacey and not had:
+            self.parts.append(" ")
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if self.skip or not data:
+            return
+        if not data.strip(" \t\n\r\xa0\u202f"):
+            # Pretty-printed markup inserts "\n  " between spans — not a typed Abstand.
+            if "\n" in data or "\r" in data:
+                return
+            data = " "
+        if self.had_data_stack:
+            self.had_data_stack[-1] = True
+        self.parts.append(data)
+
+
+def extract_prompt_from_html(html: str) -> str:
+    """Remaining typeable text from a typewriter fragment. Spaces count; done spans do not."""
+    parser = _PromptParser()
+    parser.feed(html or "")
+    parser.close()
+    return normalize_prompt_text("".join(parser.parts))
+
+
+def pick_remaining_prompt(htmls: list[str]) -> str:
+    """Choose the real remaining line. Empty wrappers lose to content; space-only is valid."""
+    best = ""
+    for html in htmls:
+        text = extract_prompt_from_html(html)
+        if len(text) > len(best):
+            best = text
+    if best == "":
+        raise TimeoutException("Tipptext ist leer")
+    return best
+
+
+def glyphs_to_type(text: str) -> list[str]:
+    """One list entry per keystroke, layout-independent glyph identity."""
+    return [keys_for_char(ch) for ch in normalize_prompt_text(text)]
+
+
+def glyph_payload(ch: str) -> dict:
+    """CDP/key event for this glyph. Identity is `text`, never a physical KeyY/KeyZ code."""
+    glyph = keys_for_char(ch)
+    if glyph == " ":
+        return {"glyph": " ", "key": " ", "code": "Space", "vk": 32, "text": " ", "insert_text": " "}
+    if glyph == "\n":
+        return {"glyph": "\n", "key": "Enter", "code": "Enter", "vk": 13, "text": "\r", "insert_text": "\n"}
+    return {
+        "glyph": glyph,
+        "key": glyph,
+        "code": "",
+        "vk": 0,
+        "text": glyph,
+        "insert_text": glyph,
+    }
+
+
+def collect_prompt_html(driver) -> list[str]:
+    htmls: list[str] = []
+    seen: set[str] = set()
+
+    def add(html: str | None) -> None:
+        raw = (html or "").strip()
+        if not raw or raw in seen:
+            return
+        seen.add(raw)
+        htmls.append(raw)
+
+    for by, value in PROMPT_SELECTORS:
+        try:
+            els = driver.find_elements(by, value)
+        except Exception:
+            continue
+        for el in els[:30]:
+            try:
+                add(el.get_attribute("outerHTML"))
+            except Exception:
+                continue
+            try:
+                parent = driver.execute_script(
+                    "var e=arguments[0]; return e && e.parentElement ? e.parentElement.outerHTML : '';",
+                    el,
+                )
+                add(parent)
+            except Exception:
+                continue
+    return htmls
 
 
 def prompt_text(driver, timeout: float = 8.0) -> str:
-    el = first_present(driver, PROMPT_SELECTORS, timeout=timeout)
-    try:
-        text = driver.execute_script(EXTRACT_PROMPT_JS, el) or ""
-    except Exception:
-        text = el.get_attribute("textContent") or el.text or ""
-    text = normalize_prompt_text(text).strip("\n\r")
-    if not text.strip():
-        raise TimeoutException("Tipptext ist leer")
-    return text
+    """Remaining prompt including Abstände. Whitespace-only is typeable, not empty."""
+    end = time.time() + timeout
+    last: Exception | None = None
+    while time.time() < end:
+        try:
+            return pick_remaining_prompt(collect_prompt_html(driver))
+        except TimeoutException as exc:
+            last = exc
+        time.sleep(0.12)
+    raise last or TimeoutException("Tipptext ist leer")
 
 
 def pass_altcha_then_reload(driver) -> bool:
@@ -370,28 +509,41 @@ def focus_typer(driver) -> None:
 
 
 def type_char(driver, ch: str) -> None:
-    """One real keystroke. Space must be keyCode 32 / code Space — Keys.SPACE is not enough."""
-    if ch in ("\n", "\r"):
-        key, code, vk, text = "Enter", "Enter", 13, "\r"
-    elif ch in (" ", "\xa0", "\u202f", "\u2009"):
-        key, code, vk, text = " ", "Space", 32, " "
-    else:
-        key = ch
-        code = f"Key{ch.upper()}" if len(ch) == 1 and ch.isalpha() else ch
-        vk = ord(ch) if len(ch) == 1 else 0
-        text = ch
+    """Insert this glyph as-is. No physical KeyY/KeyZ — those remap on QWERTZ/AZERTY."""
+    info = glyph_payload(ch)
+    text = info["insert_text"]
     try:
-        payload = {
-            "key": key,
-            "code": code,
-            "windowsVirtualKeyCode": vk,
-            "nativeVirtualKeyCode": vk,
-            "text": text,
-            "unmodifiedText": text,
-        }
-        driver.execute_cdp_cmd("Input.dispatchKeyEvent", {"type": "keyDown", **payload})
-        driver.execute_cdp_cmd("Input.dispatchKeyEvent", {"type": "char", "text": text, "unmodifiedText": text})
-        driver.execute_cdp_cmd("Input.dispatchKeyEvent", {"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk})
+        # Key events first: typewriter.at reads keydown/keypress (insertText would skip them).
+        driver.execute_cdp_cmd(
+            "Input.dispatchKeyEvent",
+            {
+                "type": "keyDown",
+                "key": info["key"],
+                "code": info["code"],
+                "text": info["text"],
+                "unmodifiedText": info["text"],
+                "windowsVirtualKeyCode": info["vk"],
+                "nativeVirtualKeyCode": info["vk"],
+            },
+        )
+        driver.execute_cdp_cmd(
+            "Input.dispatchKeyEvent",
+            {"type": "char", "text": info["text"], "unmodifiedText": info["text"]},
+        )
+        driver.execute_cdp_cmd(
+            "Input.dispatchKeyEvent",
+            {
+                "type": "keyUp",
+                "key": info["key"],
+                "code": info["code"],
+                "windowsVirtualKeyCode": info["vk"],
+            },
+        )
+        return
+    except Exception:
+        pass
+    try:
+        driver.execute_cdp_cmd("Input.insertText", {"text": text})
         return
     except Exception:
         pass
@@ -400,12 +552,9 @@ def type_char(driver, ch: str) -> None:
     try:
         driver.execute_script(
             "var ch=arguments[0];"
-            "var isSp=ch===' '||ch==='\\u00a0';"
-            "var key=isSp?' ':ch;"
-            "var code=isSp?'Space':('Key'+(ch.toUpperCase?ch.toUpperCase():ch));"
-            "var kc=isSp?32:ch.charCodeAt(0);"
+            "var kc=ch===' '?32:ch.charCodeAt(0);"
             "var t=document.activeElement||document.body;"
-            "var o={key:key,code:code,keyCode:kc,which:kc,charCode:kc,bubbles:true,cancelable:true};"
+            "var o={key:ch,code:'',keyCode:kc,which:kc,charCode:kc,bubbles:true,cancelable:true};"
             "t.dispatchEvent(new KeyboardEvent('keydown',o));"
             "t.dispatchEvent(new KeyboardEvent('keypress',o));"
             "document.dispatchEvent(new KeyboardEvent('keydown',o));"
@@ -919,7 +1068,7 @@ class TypeHackApp:
                 pass
 
     def type_into_page(self, text: str) -> None:
-        for ch in text:
+        for ch in glyphs_to_type(text):
             type_char(self.driver, ch)
 
     def start_typing(self) -> None:
@@ -936,7 +1085,7 @@ class TypeHackApp:
                 if self.root:
                     self.root.after(0, lambda t=language_text: self.preview.config(text=t))
                 focus_typer(self.driver)
-                for ch in language_text:
+                for ch in glyphs_to_type(language_text):
                     if self.stop_flag.is_set():
                         break
                     type_char(self.driver, ch)

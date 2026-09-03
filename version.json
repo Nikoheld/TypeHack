@@ -1,6 +1,6 @@
 {
-  "version": "2.4.0",
-  "installer_url": "https://github.com/Nikoheld/TypeHack/releases/download/v2.4.0/TypeHack-Setup-2.4.0.exe",
-  "sha256": "643e219448f41d383e4e36b4c54e267ea06d2980f1d5730705251961ccb46904",
-  "notes": "Anschläge/10min, instant login after captcha, real Space key."
+  "version": "2.4.1",
+  "installer_url": "https://github.com/Nikoheld/TypeHack/releases/download/v2.4.1/TypeHack-Setup-2.4.1.exe",
+  "sha256": "8d7289805cd46b2e6245ca1702e593bad70c56fe3006bc60e7d55cb581d32c57",
+  "notes": "Zero wrong keys: remaining prompt including spaces, layout-independent glyphs, skip already-typed."
 }

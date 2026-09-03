@@ -58,11 +58,6 @@ class CredentialTests(unittest.TestCase):
         cfg = th.merge_config({"strokes_per_10min": 1800})
         self.assertEqual(cfg["strokes_per_10min"], 1800)
 
-    def test_prompt_extractor_walks_text_nodes_and_nbsp(self):
-        self.assertIn("childNodes", th.EXTRACT_PROMPT_JS)
-        self.assertIn("spacey", th.EXTRACT_PROMPT_JS)
-        self.assertIn("\\u00a0", th.EXTRACT_PROMPT_JS)
-
     def test_login_does_not_block_on_captcha_refresh(self):
         import inspect
 
@@ -79,8 +74,8 @@ class CredentialTests(unittest.TestCase):
         self.assertEqual(cfg["base_url"], th.DEFAULT_CONFIG["base_url"])
 
     def test_spaces_become_keys_space(self):
-        self.assertEqual(th.keys_for_char(" "), th.Keys.SPACE)
-        self.assertEqual(th.keys_for_char("\xa0"), th.Keys.SPACE)
+        self.assertEqual(th.keys_for_char(" "), " ")
+        self.assertEqual(th.keys_for_char("\xa0"), " ")
         self.assertEqual(th.keys_for_char("a"), "a")
         self.assertEqual(th.normalize_prompt_text("a\xa0b"), "a b")
 
@@ -90,6 +85,127 @@ class CredentialTests(unittest.TestCase):
     def test_app_dir_dev_is_source_folder(self):
         self.assertEqual(th.app_dir(), Path(th.__file__).resolve().parent)
         self.assertTrue(hasattr(th, "VERSION"))
+
+
+class PromptExtractTests(unittest.TestCase):
+    """Drive the shipped extract / pick / glyph path — the same helpers prompt_text and start_typing use."""
+
+    LINE_WITH_SPACES = (
+        '<div id="typewriter-text">'
+        '<span class="letter">H</span><span class="letter">a</span>'
+        '<span class="letter">l</span><span class="letter">l</span>'
+        '<span class="letter">o</span>'
+        '<span class="space">&nbsp;</span>'
+        '<span class="letter">W</span><span class="letter">e</span>'
+        '<span class="letter">l</span><span class="letter">t</span>'
+        '<span class="blank"></span>'
+        '<span class="letter">ö</span>'
+        " "
+        '<span class="letter">ü</span>'
+        "</div>"
+    )
+    SPACE_ONLY_NBSP = '<div id="typewriter-text"><span class="space">&nbsp;</span></div>'
+    SPACE_ONLY_TEXT = '<div id="typewriter-text"> </div>'
+    EMPTY_WRAPPER = '<div class="current-line"></div>'
+    DONE_PREFIX = (
+        '<div id="typewriter-text">'
+        '<span class="letter done">H</span>'
+        '<span class="letter correct">a</span>'
+        '<span class="letter">l</span>'
+        '<span class="space">&nbsp;</span>'
+        '<span class="letter">ö</span>'
+        "</div>"
+    )
+
+    def test_extract_keeps_abstaende_and_umlauts(self):
+        text = th.extract_prompt_from_html(self.LINE_WITH_SPACES)
+        self.assertIn("Hallo", text)
+        self.assertIn("Welt", text)
+        self.assertIn("ö", text)
+        self.assertIn("ü", text)
+        self.assertIn(" ", text)
+        self.assertNotEqual(text.replace(" ", ""), text)
+        self.assertIn("Hallo Welt", text)
+
+    def test_space_only_remaining_is_typeable(self):
+        for html in (self.SPACE_ONLY_NBSP, self.SPACE_ONLY_TEXT):
+            text = th.pick_remaining_prompt([html])
+            self.assertTrue(text)
+            self.assertEqual(text.strip("\n\r"), text)
+            self.assertEqual(set(text), {" "})
+            self.assertEqual(th.glyphs_to_type(text), [" "] * len(text))
+
+    def test_space_only_does_not_raise_empty_prompt(self):
+        th.pick_remaining_prompt([self.SPACE_ONLY_NBSP])
+        th.pick_remaining_prompt([self.SPACE_ONLY_TEXT])
+
+    def test_empty_wrapper_loses_to_real_line(self):
+        picked = th.pick_remaining_prompt([self.EMPTY_WRAPPER, self.LINE_WITH_SPACES])
+        self.assertEqual(picked, th.extract_prompt_from_html(self.LINE_WITH_SPACES))
+        with self.assertRaises(th.TimeoutException) as ctx:
+            th.pick_remaining_prompt([self.EMPTY_WRAPPER])
+        self.assertIn("leer", str(ctx.exception).lower())
+
+    def test_skips_already_typed_spans(self):
+        remaining = th.extract_prompt_from_html(self.DONE_PREFIX)
+        self.assertFalse(remaining.startswith("Ha"))
+        self.assertTrue(remaining.startswith("l"))
+        self.assertIn(" ", remaining)
+        self.assertIn("ö", remaining)
+        self.assertEqual(th.glyphs_to_type(remaining), list(remaining))
+
+    def test_pretty_printed_indent_is_not_typed_spaces(self):
+        html = """<div id="typewriter-text">
+  <span class="letter done">A</span>
+  <span class="letter">b</span>
+  <span class="space">&nbsp;</span>
+  <span class="letter">ö</span>
+</div>"""
+        remaining = th.extract_prompt_from_html(html)
+        self.assertEqual(remaining, "b ö")
+        self.assertEqual(th.glyphs_to_type(remaining), ["b", " ", "ö"])
+
+
+class GlyphSendTests(unittest.TestCase):
+    def test_payload_is_glyph_not_scan_code(self):
+        for ch in (" ", "\xa0", "z", "y", "ö", "ß"):
+            info = th.glyph_payload(ch)
+            want = " " if ch in (" ", "\xa0") else ch
+            self.assertEqual(info["insert_text"], want)
+            self.assertEqual(info["text"].replace("\r", "\n") if want == "\n" else info["insert_text"], want)
+            self.assertFalse(
+                (info.get("code") or "").startswith("Key"),
+                f"{ch!r} must not use physical Key* (QWERTZ remaps y/z)",
+            )
+
+    def test_qwertz_y_and_z_stay_distinct(self):
+        y = th.glyph_payload("y")
+        z = th.glyph_payload("z")
+        self.assertEqual(y["insert_text"], "y")
+        self.assertEqual(z["insert_text"], "z")
+        self.assertNotEqual(y["insert_text"], z["insert_text"])
+        self.assertNotEqual(y["code"], "KeyZ")
+        self.assertNotEqual(z["code"], "KeyY")
+        self.assertEqual(y["vk"], 0)
+        self.assertEqual(z["vk"], 0)
+
+    def test_start_typing_emits_remaining_in_order(self):
+        remaining = th.extract_prompt_from_html(PromptExtractTests.DONE_PREFIX)
+        sent = th.glyphs_to_type(remaining)
+        self.assertEqual(sent, ["l", " ", "ö"])
+        self.assertNotIn("H", sent)
+        self.assertNotIn("a", sent)
+
+    def test_type_char_uses_glyph_payload(self):
+        import inspect
+
+        src = inspect.getsource(th.type_char)
+        self.assertIn("glyph_payload", src)
+        self.assertIn("Input.insertText", src)
+        self.assertNotIn("Key{ch.upper()}", src)
+        typing_src = inspect.getsource(th.TypeHackApp.start_typing)
+        self.assertIn("glyphs_to_type", typing_src)
+        self.assertIn("prompt_text", typing_src)
 
 
 class UpdaterTests(unittest.TestCase):
