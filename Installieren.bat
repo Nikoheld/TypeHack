@@ -1,15 +1,22 @@
 @echo off
-echo Installing Python...
-start /wait https://www.python.org/ftp/python/3.12.1/python-3.12.1-amd64.exe /quiet InstallAllUsers=1 PrependPath=1
-echo Python installed successfully!
+setlocal
+cd /d "%~dp0"
 
-echo Installing required Python packages...
-pip install selenium 
-pip install pynput 
-pip install Controller 
-pip install colorama 
-pip install PyGetWindow
-echo Required packages installed successfully!
+where py >nul 2>&1
+if %errorlevel%==0 (
+  set PY=py -3
+) else (
+  set PY=python
+)
 
-echo All installations completed.
+echo Installing Python packages (Selenium Manager fetches Edge/Chrome drivers)...
+%PY% -m pip install --upgrade pip
+%PY% -m pip install -r requirements.txt
+if %errorlevel% neq 0 (
+  echo pip failed. Install Python 3.12+ from https://www.python.org/downloads/ and tick "Add python.exe to PATH".
+  pause
+  exit /b 1
+)
+
+echo Done. Start with Start.bat or:  %PY% TypeHack.py
 pause

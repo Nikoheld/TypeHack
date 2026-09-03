@@ -1,0 +1,9 @@
+credentials.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.log
+msedgedriver.exe
+chromedriver.exe
+.DS_Store
