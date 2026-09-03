@@ -15,7 +15,9 @@ Hilfsprogramm für [typewriter.at](https://www.typewriter.at) (öffentliche Inst
 2. Installer starten (legt TypeHack nach `%LOCALAPPDATA%\TypeHack`, Desktop-Verknüpfung optional).
 3. **TypeHack** öffnen — Microsoft Edge ist auf Windows 10/11 schon da.
 
-Der Installer kommt aus GitHub Actions (`Build Windows installer`). Manuell: `build.bat` auf einem Windows-PC, danach `installer\TypeHack.iss` mit [Inno Setup](https://jrsoftware.org/isinfo.php) kompilieren.
+**Installer bauen (einmalig auf einem Windows-PC):** `build.bat` ausführen, dann `installer\TypeHack.iss` in [Inno Setup](https://jrsoftware.org/isinfo.php) kompilieren. Ergebnis: `dist\TypeHack-Setup-2.1.0.exe`.
+
+Oder GitHub Actions: Datei `installer/github-actions-build-windows.yml` nach `.github/workflows/build-windows.yml` kopieren und den Workflow starten — Artifact **TypeHack-Setup**.
 
 ## Windows einrichten (Entwickler, mit Python)
 
