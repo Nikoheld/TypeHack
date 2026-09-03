@@ -1,4 +1,6 @@
 {
   "version": "2.2.0",
-  "notes": "Auto-updater, config GUI, Selenium Manager."
+  "installer_url": "https://github.com/Nikoheld/TypeHack/releases/download/v2.2.0/TypeHack-Setup-2.2.0.exe",
+  "sha256": "672ab216c8bf551e410d9768d7b82a13c9e91f7594ba9ef51f3bdbbd7134a386",
+  "notes": "Windows installer, config GUI, auto-updater, Selenium Manager."
 }
