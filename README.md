@@ -13,7 +13,7 @@ Hilfsprogramm für [typewriter.at](https://www.typewriter.at) (öffentliche Inst
 
 ## Windows: Installer (kein Python nötig)
 
-1. Unter [Releases](https://github.com/Nikoheld/TypeHack/releases) **TypeHack-Setup-2.4.1.exe** laden.
+1. Unter [Releases](https://github.com/Nikoheld/TypeHack/releases) **TypeHack-Setup-2.4.2.exe** laden.
 2. Installer starten (legt TypeHack nach `%LOCALAPPDATA%\TypeHack`, Desktop-Verknüpfung optional).
 3. **TypeHack** öffnen — Microsoft Edge ist auf Windows 10/11 schon da.
 

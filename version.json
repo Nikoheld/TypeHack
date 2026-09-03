@@ -1,6 +1,6 @@
 {
-  "version": "2.4.1",
-  "installer_url": "https://github.com/Nikoheld/TypeHack/releases/download/v2.4.1/TypeHack-Setup-2.4.1.exe",
-  "sha256": "8d7289805cd46b2e6245ca1702e593bad70c56fe3006bc60e7d55cb581d32c57",
-  "notes": "Zero wrong keys: remaining prompt including spaces, layout-independent glyphs, skip already-typed."
+  "version": "2.4.2",
+  "installer_url": "https://github.com/Nikoheld/TypeHack/releases/download/v2.4.2/TypeHack-Setup-2.4.2.exe",
+  "sha256": "49a8866549bd3e718f10470b5ace9986cabac2aa1ffef42228f44b69cd4f21ff",
+  "notes": "Read #text_todo_1; empty spans are spaces; layout-independent glyphs."
 }

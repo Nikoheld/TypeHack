@@ -1,5 +1,5 @@
 #define MyAppName "TypeHack"
-#define MyAppVersion "2.4.1"
+#define MyAppVersion "2.4.2"
 #define MyAppPublisher "Nikoheld"
 #define MyAppURL "https://github.com/Nikoheld/TypeHack"
 #define MyAppExeName "TypeHack.exe"

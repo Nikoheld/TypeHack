@@ -29,6 +29,8 @@ class CredentialTests(unittest.TestCase):
 
     def test_prompt_selectors_not_empty(self):
         self.assertGreaterEqual(len(th.PROMPT_SELECTORS), 3)
+        ids = [value for by, value in th.PROMPT_SELECTORS if by == th.By.ID]
+        self.assertIn("text_todo_1", ids)
 
     def test_merge_config_keeps_defaults_and_overrides(self):
         cfg = th.merge_config({"delay_ms": 120, "unknown": 1})
@@ -153,6 +155,45 @@ class PromptExtractTests(unittest.TestCase):
         self.assertIn(" ", remaining)
         self.assertIn("ö", remaining)
         self.assertEqual(th.glyphs_to_type(remaining), list(remaining))
+
+    # Real at4.typewriter.at remaining node: bare spans, empty span = space.
+    TODO_LINE = (
+        '<div id="text_todo_1">'
+        "<span>H</span><span>a</span><span>l</span><span>l</span><span>o</span>"
+        "<span></span>"
+        "<span>W</span><span>e</span><span>l</span><span>t</span>"
+        "<span> </span>"
+        "<span>ö</span>"
+        "</div>"
+    )
+    TODO_SPACE_EMPTY = '<div id="text_todo_1"><span></span></div>'
+    TODO_SPACE_NBSP = '<div id="text_todo_1"><span>&nbsp;</span></div>'
+    TODO_SPACE_TEXT = '<div id="text_todo_1"><span> </span></div>'
+    TODO_AFTER_DONE_PARENT = (
+        '<div class="tw-wrap">'
+        '<div id="text_done_1"><span>H</span><span>a</span></div>'
+        '<div id="text_todo_1"><span>l</span><span></span><span>ö</span></div>'
+        "</div>"
+    )
+
+    def test_text_todo_1_keeps_letter_and_empty_space_spans(self):
+        text = th.extract_prompt_from_html(self.TODO_LINE)
+        self.assertEqual(text, "Hallo Welt ö")
+        self.assertEqual(th.glyphs_to_type(text), list("Hallo Welt ö"))
+        self.assertIn("text_todo_1", [v for _b, v in th.PROMPT_SELECTORS])
+
+    def test_text_todo_1_space_only_remaining_is_typeable(self):
+        for html in (self.TODO_SPACE_EMPTY, self.TODO_SPACE_NBSP, self.TODO_SPACE_TEXT):
+            text = th.pick_remaining_prompt([html])
+            self.assertEqual(set(text), {" "})
+            self.assertEqual(th.glyphs_to_type(text), [" "] * len(text))
+
+    def test_text_todo_1_preferred_over_done_parent(self):
+        parent = self.TODO_AFTER_DONE_PARENT
+        todo = '<div id="text_todo_1"><span>l</span><span></span><span>ö</span></div>'
+        picked = th.pick_remaining_prompt([parent, todo, self.EMPTY_WRAPPER])
+        self.assertEqual(picked, "l ö")
+        self.assertFalse(picked.startswith("Ha"))
 
     def test_pretty_printed_indent_is_not_typed_spaces(self):
         html = """<div id="typewriter-text">

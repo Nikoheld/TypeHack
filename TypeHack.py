@@ -34,7 +34,7 @@ def app_dir() -> Path:
 BASE_DIR = app_dir()
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 CONFIG_FILE = BASE_DIR / "config.json"
-VERSION = "2.4.1"
+VERSION = "2.4.2"
 
 PRESET_URLS = {
     "Österreich (at4)": "https://at4.typewriter.at",
@@ -105,6 +105,9 @@ CAPTCHA_CLICK = [
     (By.CSS_SELECTOR, "label:has(input[type='checkbox'])"),
 ]
 PROMPT_SELECTORS = [
+    (By.ID, "text_todo_1"),
+    (By.CSS_SELECTOR, "[id^='text_todo']"),
+    (By.ID, "text_todo"),
     (By.CSS_SELECTOR, "#typewriter-text"),
     (By.CSS_SELECTOR, ".typewriter-text"),
     (By.CSS_SELECTOR, "#textToType"),
@@ -315,6 +318,8 @@ _DONE_HINTS = (
 )
 _SPACE_HINTS = ("space", "blank", "gap", "nbsp", "whitespace", "word-sep", "wordsep", "word_sep")
 _SKIP_TAGS = {"script", "style", "noscript", "svg"}
+# typewriter.at remaining chars are bare <span>s; empty ones are Abstände.
+_LEAF_SPACE_TAGS = {"span", "i", "b", "em", "strong", "font"}
 
 
 def normalize_prompt_text(raw: str) -> str:
@@ -354,11 +359,13 @@ class _PromptParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.skip = 0
+        self.tag_stack: list[str] = []
         self.spacey_stack: list[bool] = []
         self.had_data_stack: list[bool] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         tag = (tag or "").lower()
+        self.tag_stack.append(tag)
         if tag in _SKIP_TAGS:
             self.skip += 1
             self.spacey_stack.append(False)
@@ -375,15 +382,20 @@ class _PromptParser(HTMLParser):
         self.had_data_stack.append(False)
 
     def handle_endtag(self, tag: str) -> None:
-        if not self.spacey_stack:
+        if not self.tag_stack:
             return
-        spacey = self.spacey_stack.pop()
-        had = self.had_data_stack.pop()
+        opened = self.tag_stack.pop()
+        spacey = self.spacey_stack.pop() if self.spacey_stack else False
+        had = self.had_data_stack.pop() if self.had_data_stack else False
         if self.skip:
             self.skip = max(0, self.skip - 1)
             return
-        if spacey and not had:
+        leaf_space = (not had) and (spacey or opened in _LEAF_SPACE_TAGS)
+        if leaf_space:
             self.parts.append(" ")
+            had = True
+        if had and self.had_data_stack:
+            self.had_data_stack[-1] = True
 
     def handle_startendtag(self, tag: str, attrs) -> None:
         self.handle_starttag(tag, attrs)
@@ -410,16 +422,36 @@ def extract_prompt_from_html(html: str) -> str:
     return normalize_prompt_text("".join(parser.parts))
 
 
+def _root_id(html: str) -> str:
+    blob = (html or "").lstrip()[:200].lower()
+    for key in ('id="', "id='"):
+        start = blob.find(key)
+        if start < 0:
+            continue
+        start += len(key)
+        quote = '"' if key.endswith('"') else "'"
+        end = blob.find(quote, start)
+        if end > start:
+            return blob[start:end]
+    return ""
+
+
 def pick_remaining_prompt(htmls: list[str]) -> str:
-    """Choose the real remaining line. Empty wrappers lose to content; space-only is valid."""
-    best = ""
+    """Choose the real remaining line. Prefer #text_todo_*; empty wrappers lose; space-only is valid."""
+    todo: list[str] = []
+    other: list[str] = []
     for html in htmls:
         text = extract_prompt_from_html(html)
-        if len(text) > len(best):
-            best = text
-    if best == "":
+        if text == "":
+            continue
+        if _root_id(html).startswith("text_todo"):
+            todo.append(text)
+        else:
+            other.append(text)
+    pool = todo or other
+    if not pool:
         raise TimeoutException("Tipptext ist leer")
-    return best
+    return max(pool, key=len)
 
 
 def glyphs_to_type(text: str) -> list[str]:
@@ -465,6 +497,14 @@ def collect_prompt_html(driver) -> list[str]:
                 add(el.get_attribute("outerHTML"))
             except Exception:
                 continue
+            el_id = ""
+            try:
+                el_id = el.get_attribute("id") or ""
+            except Exception:
+                el_id = ""
+            # Parent of #text_todo_1 often also wraps #text_done_* — that would replay typed letters.
+            if str(el_id).startswith("text_todo"):
+                continue
             try:
                 parent = driver.execute_script(
                     "var e=arguments[0]; return e && e.parentElement ? e.parentElement.outerHTML : '';",
@@ -497,8 +537,8 @@ def pass_altcha_then_reload(driver) -> bool:
 def focus_typer(driver) -> None:
     try:
         driver.execute_script(
-            "var sels=['#typewriter-text','.typewriter-text','#textToType',"
-            "'.current-line','.tw-text','#twCanvas','canvas','body'];"
+            "var sels=['#text_todo_1','[id^=text_todo]','#typewriter-text',"
+            "'.typewriter-text','#textToType','.current-line','.tw-text','#twCanvas','canvas','body'];"
             "for (var i=0;i<sels.length;i++){"
             "  var e=document.querySelector(sels[i]);"
             "  if(e){ try{e.click();}catch(x){} try{e.focus();}catch(x){} return; }"
