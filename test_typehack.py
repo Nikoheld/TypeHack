@@ -46,6 +46,15 @@ class CredentialTests(unittest.TestCase):
         cfg = th.load_config(Path("/tmp/typehack-missing-config.json"))
         self.assertEqual(cfg["base_url"], th.DEFAULT_CONFIG["base_url"])
 
+    def test_spaces_become_keys_space(self):
+        self.assertEqual(th.keys_for_char(" "), th.Keys.SPACE)
+        self.assertEqual(th.keys_for_char("\xa0"), th.Keys.SPACE)
+        self.assertEqual(th.keys_for_char("a"), "a")
+        self.assertEqual(th.normalize_prompt_text("a\xa0b"), "a b")
+
+    def test_auto_install_updates_defaults_on(self):
+        self.assertTrue(th.DEFAULT_CONFIG["auto_install_updates"])
+
     def test_app_dir_dev_is_source_folder(self):
         self.assertEqual(th.app_dir(), Path(th.__file__).resolve().parent)
         self.assertTrue(hasattr(th, "VERSION"))

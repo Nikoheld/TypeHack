@@ -33,7 +33,7 @@ def app_dir() -> Path:
 BASE_DIR = app_dir()
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 CONFIG_FILE = BASE_DIR / "config.json"
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 PRESET_URLS = {
     "Österreich (at4)": "https://at4.typewriter.at",
@@ -50,16 +50,16 @@ DEFAULT_CONFIG = {
     "always_on_top": True,
     "open_level_page": True,
     "auto_start": False,
-    "type_mode": "block",
+    "type_mode": "char",
     "delay_ms": 50,
     "char_delay_ms": 18,
-    "jitter_pct": 15,
+    "jitter_pct": 0,
     "burst_chars": 0,
     "login_timeout_s": 180,
     "prompt_timeout_s": 8,
     "theme_accent": "#6ee7b7",
     "auto_update_check": True,
-    "auto_install_updates": False,
+    "auto_install_updates": True,
 }
 
 LOGIN_PATH = "/index.php?r=site/login"
@@ -161,12 +161,67 @@ def first_present(driver, locators, timeout: float = 2.0):
     raise TimeoutException("Kein passendes Element gefunden")
 
 
+def normalize_prompt_text(raw: str) -> str:
+    return (raw or "").replace("\xa0", " ").replace("\u202f", " ").replace("\t", " ")
+
+
+def keys_for_char(ch: str):
+    if ch in (" ", "\xa0", "\u202f"):
+        return Keys.SPACE
+    if ch in ("\n", "\r"):
+        return Keys.RETURN
+    return ch
+
+
 def prompt_text(driver, timeout: float = 8.0) -> str:
     el = first_present(driver, PROMPT_SELECTORS, timeout=timeout)
-    text = (el.text or el.get_attribute("textContent") or "").strip()
-    if not text:
+    try:
+        js = (
+            "var e=arguments[0];"
+            "var spans=e.querySelectorAll('span');"
+            "if(spans.length){"
+            "  return Array.prototype.map.call(spans,function(s){"
+            "    var t=s.textContent;"
+            "    if(t==null||t===''||t===' '||t==='\\u00a0') return ' ';"
+            "    return t;"
+            "  }).join('');"
+            "}"
+            "return (e.textContent||'');"
+        )
+        text = driver.execute_script(js, el) or ""
+    except Exception:
+        text = el.get_attribute("textContent") or el.text or ""
+    text = normalize_prompt_text(text).strip("\n\r")
+    if not text.strip():
         raise TimeoutException("Tipptext ist leer")
     return text
+
+
+def pass_altcha_then_reload(driver) -> bool:
+    """Click the ALTCHA/captcha control once, then reload — that is how typewriter.at lets you in."""
+    selectors = [
+        (By.CSS_SELECTOR, "#chal-form button"),
+        (By.CSS_SELECTOR, "form#chal-form button"),
+        (By.CSS_SELECTOR, ".altcha, .altcha-checkbox, button.altcha"),
+        (By.CSS_SELECTOR, "#altcha"),
+        (By.CSS_SELECTOR, "input[name='altcha']"),
+        (By.CSS_SELECTOR, "#chal-form"),
+        (By.XPATH, "//button[contains(., 'Roboter') or contains(., 'Captcha') or contains(., 'Verify') or contains(., 'Mensch')]"),
+        (By.CSS_SELECTOR, "input[type='checkbox']"),
+    ]
+    clicked = False
+    for by, value in selectors:
+        try:
+            el = WebDriverWait(driver, 4).until(EC.element_to_be_clickable((by, value)))
+            driver.execute_script("arguments[0].click();", el)
+            clicked = True
+            break
+        except Exception:
+            continue
+    time.sleep(1.2)
+    driver.refresh()
+    time.sleep(0.8)
+    return clicked
 
 
 def _stealth(options) -> None:
@@ -223,8 +278,8 @@ class TypeHackApp:
         accent = str(self.cfg.get("theme_accent") or PALETTE["accent"])
         self.root = tk.Tk()
         self.root.title("TypeHack")
-        self.root.geometry("920x620")
-        self.root.minsize(820, 560)
+        self.root.geometry("420x560")
+        self.root.minsize(380, 480)
         self.root.configure(bg=PALETTE["bg"])
 
         style = ttk.Style(self.root)
@@ -238,134 +293,110 @@ class TypeHackApp:
         style.configure("Sub.TLabel", background=PALETTE["panel"], foreground=PALETTE["muted"], font=("Segoe UI", 10))
         style.configure("Accent.TLabel", background=PALETTE["panel"], foreground=accent, font=("Segoe UI", 10, "bold"))
         style.configure("TCheckbutton", background=PALETTE["card"], foreground=PALETTE["text"], font=("Segoe UI", 10))
-        style.configure("TRadiobutton", background=PALETTE["card"], foreground=PALETTE["text"], font=("Segoe UI", 10))
         style.configure("TCombobox", fieldbackground=PALETTE["panel"], background=PALETTE["panel"], foreground=PALETTE["text"])
         style.configure("Horizontal.TScale", background=PALETTE["card"], troughcolor=PALETTE["line"])
         style.configure("Primary.TButton", font=("Segoe UI", 11, "bold"), padding=8)
-        style.map("Primary.TButton", background=[("!disabled", accent), ("disabled", PALETTE["line"])], foreground=[("!disabled", "#052e1c")])
+        style.map(
+            "Primary.TButton",
+            background=[("!disabled", accent), ("disabled", PALETTE["line"])],
+            foreground=[("!disabled", "#052e1c")],
+        )
         style.configure("Ghost.TButton", font=("Segoe UI", 10), padding=6)
         style.configure("Danger.TButton", font=("Segoe UI", 10, "bold"), padding=6)
         style.map("Danger.TButton", background=[("!disabled", PALETTE["danger"])], foreground=[("!disabled", "#1a0508")])
 
-        header = ttk.Frame(self.root, style="Panel.TFrame")
-        header.pack(fill="x", padx=16, pady=(16, 8))
+        canvas = tk.Canvas(self.root, bg=PALETTE["bg"], highlightthickness=0, bd=0)
+        scroll = ttk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas, style="Card.TFrame")
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+
+        def _stretch(event):
+            canvas.itemconfigure(win, width=event.width)
+
+        canvas.bind("<Configure>", _stretch)
+
+        def _wheel(event):
+            delta = -1 if event.delta > 0 else 1
+            if getattr(event, "num", None) == 4:
+                delta = -1
+            if getattr(event, "num", None) == 5:
+                delta = 1
+            canvas.yview_scroll(delta, "units")
+
+        canvas.bind_all("<MouseWheel>", _wheel)
+        canvas.bind_all("<Button-4>", _wheel)
+        canvas.bind_all("<Button-5>", _wheel)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        pad = {"padx": 16, "pady": 4}
+        header = ttk.Frame(inner, style="Panel.TFrame")
+        header.pack(fill="x", padx=12, pady=(12, 8))
         ttk.Label(header, text="TypeHack", style="Title.TLabel").pack(side="left")
-        self.badge = ttk.Label(header, text="●  getrennt", style="Accent.TLabel")
-        self.badge.pack(side="right", padx=8)
-        ttk.Label(header, text="typewriter.at  ·  Nikoheld", style="Sub.TLabel").pack(side="right")
+        self.badge = ttk.Label(header, text="● getrennt", style="Accent.TLabel")
+        self.badge.pack(side="right")
 
-        body = ttk.Frame(self.root)
-        body.pack(fill="both", expand=True, padx=16, pady=8)
-
-        side = ttk.Frame(body, style="Card.TFrame")
-        side.pack(side="left", fill="y", padx=(0, 12))
-        main = ttk.Frame(body, style="Card.TFrame")
-        main.pack(side="left", fill="both", expand=True)
-
-        self._section(side, "Konto")
         self.vars["email"] = tk.StringVar(value=load_credentials()[0] or "")
         self.vars["password"] = tk.StringVar(value=load_credentials()[1] or "")
-        self._labeled_entry(side, "E-Mail / Benutzer", self.vars["email"])
-        self._labeled_entry(side, "Passwort", self.vars["password"], show="•")
-        self.vars["remember_login"] = tk.BooleanVar(value=bool(self.cfg["remember_login"]))
-        ttk.Checkbutton(side, text="Login speichern", variable=self.vars["remember_login"]).pack(anchor="w", padx=14, pady=2)
-
-        self._section(side, "Server")
+        self.vars["remember_login"] = tk.BooleanVar(value=True)
         self.vars["url_preset"] = tk.StringVar(value=self.cfg.get("url_preset") or "Österreich (at4)")
         self.vars["base_url"] = tk.StringVar(value=self.cfg.get("base_url") or DEFAULT_CONFIG["base_url"])
-        preset = ttk.Combobox(side, textvariable=self.vars["url_preset"], values=list(PRESET_URLS), state="readonly", width=28)
-        preset.pack(padx=14, pady=4, fill="x")
-        preset.bind("<<ComboboxSelected>>", self._on_preset)
-        self._labeled_entry(side, "Basis-URL", self.vars["base_url"])
-
-        self._section(side, "Browser")
         self.vars["browser"] = tk.StringVar(value=self.cfg.get("browser") or "Auto")
-        ttk.Combobox(side, textvariable=self.vars["browser"], values=("Auto", "Edge", "Chrome"), state="readonly", width=28).pack(
-            padx=14, pady=4, fill="x"
-        )
+        self.vars["always_on_top"] = tk.BooleanVar(value=bool(self.cfg.get("always_on_top", True)))
+        self.vars["open_level_page"] = tk.BooleanVar(value=True)
+        self.vars["auto_start"] = tk.BooleanVar(value=False)
+        self.vars["type_mode"] = tk.StringVar(value="char")
+        self.vars["delay_ms"] = tk.DoubleVar(value=50)
+        self.vars["char_delay_ms"] = tk.DoubleVar(value=float(self.cfg.get("char_delay_ms") or 18))
+        self.vars["jitter_pct"] = tk.DoubleVar(value=0)
+        self.vars["burst_chars"] = tk.IntVar(value=0)
+        self.vars["login_timeout_s"] = tk.IntVar(value=180)
+        self.vars["prompt_timeout_s"] = tk.IntVar(value=8)
+        self.vars["auto_update_check"] = tk.BooleanVar(value=True)
+        self.vars["auto_install_updates"] = tk.BooleanVar(value=True)
 
-        self._section(side, "Fenster")
-        self.vars["always_on_top"] = tk.BooleanVar(value=bool(self.cfg["always_on_top"]))
-        self.vars["open_level_page"] = tk.BooleanVar(value=bool(self.cfg["open_level_page"]))
-        self.vars["auto_start"] = tk.BooleanVar(value=bool(self.cfg["auto_start"]))
-        ttk.Checkbutton(side, text="Immer im Vordergrund", variable=self.vars["always_on_top"], command=self._apply_topmost).pack(
-            anchor="w", padx=14, pady=2
-        )
-        ttk.Checkbutton(side, text="Nach Login Level-Seite öffnen", variable=self.vars["open_level_page"]).pack(anchor="w", padx=14, pady=2)
-        ttk.Checkbutton(side, text="Nach Login automatisch tippen", variable=self.vars["auto_start"]).pack(anchor="w", padx=14, pady=2)
+        self._labeled_entry(inner, "E-Mail", self.vars["email"])
+        self._labeled_entry(inner, "Passwort", self.vars["password"], show="•")
+        ttk.Label(inner, text="Server", style="Muted.TLabel").pack(anchor="w", padx=16)
+        preset = ttk.Combobox(inner, textvariable=self.vars["url_preset"], values=list(PRESET_URLS), state="readonly")
+        preset.pack(fill="x", padx=16, pady=(0, 6))
+        preset.bind("<<ComboboxSelected>>", self._on_preset)
 
-        self._section(side, "Updates")
-        self.vars["auto_update_check"] = tk.BooleanVar(value=bool(self.cfg.get("auto_update_check", True)))
-        self.vars["auto_install_updates"] = tk.BooleanVar(value=bool(self.cfg.get("auto_install_updates", False)))
-        ttk.Checkbutton(side, text="Beim Start prüfen", variable=self.vars["auto_update_check"]).pack(anchor="w", padx=14, pady=2)
-        ttk.Checkbutton(side, text="Updates still installieren", variable=self.vars["auto_install_updates"]).pack(
-            anchor="w", padx=14, pady=2
-        )
-        self.update_label = ttk.Label(side, text=f"Installiert: v{VERSION}", style="Muted.TLabel")
-        self.update_label.pack(anchor="w", padx=14, pady=(4, 2))
-        ttk.Button(side, text="Jetzt prüfen", style="Ghost.TButton", command=lambda: self.check_updates(False)).pack(
-            fill="x", padx=14, pady=4
-        )
-        self.update_progress = ttk.Progressbar(side, mode="determinate", maximum=100)
-        self.update_progress.pack(fill="x", padx=14, pady=(0, 8))
+        ttk.Label(inner, text="Tempo (links = schnell)", style="Muted.TLabel").pack(anchor="w", padx=16)
+        ttk.Scale(inner, from_=1, to=80, variable=self.vars["char_delay_ms"], orient="horizontal").pack(fill="x", padx=16)
 
-        ttk.Button(side, text="Einstellungen speichern", style="Ghost.TButton", command=self.save_settings).pack(
-            fill="x", padx=14, pady=(4, 16)
-        )
-
-        # Main column
         self.preview = tk.Label(
-            main,
-            text="Noch kein Text. Verbinden, Level wählen, dann Start.",
-            wraplength=520,
+            inner,
+            text="Verbinden → Captcha klicken (TypeHack lädt neu) → Level wählen → Start.",
+            wraplength=360,
             justify="left",
             bg=PALETTE["panel"],
             fg=PALETTE["text"],
-            font=("Cascadia Mono", 13),
-            padx=16,
-            pady=16,
+            font=("Segoe UI", 11),
+            padx=12,
+            pady=12,
             anchor="nw",
         )
-        self.preview.pack(fill="both", expand=True, padx=16, pady=(16, 8))
+        self.preview.pack(fill="x", padx=16, pady=8)
 
-        self.status_label = ttk.Label(main, text="Bereit. Zuerst mit typewriter.at verbinden.", style="Muted.TLabel")
+        self.status_label = ttk.Label(inner, text="Bereit.", style="Muted.TLabel")
         self.status_label.pack(anchor="w", padx=16)
 
-        btns = ttk.Frame(main, style="Card.TFrame")
+        btns = ttk.Frame(inner, style="Card.TFrame")
         btns.pack(fill="x", padx=16, pady=10)
         self.connect_button = ttk.Button(btns, text="Verbinden", style="Primary.TButton", command=self.connect)
-        self.connect_button.pack(side="left", padx=(0, 8))
-        self.start_button = ttk.Button(btns, text="Start Typing", style="Primary.TButton", command=self.toggle_typing, state="disabled")
+        self.connect_button.pack(side="left", padx=(0, 6))
+        self.start_button = ttk.Button(btns, text="Start", style="Primary.TButton", command=self.toggle_typing, state="disabled")
         self.start_button.pack(side="left", padx=4)
         ttk.Button(btns, text="Stop", style="Ghost.TButton", command=self.stop_typing).pack(side="left", padx=4)
-        ttk.Button(btns, text="Panic", style="Danger.TButton", command=self.panic_button_callback).pack(side="right")
+        ttk.Button(btns, text="Beenden", style="Danger.TButton", command=self.quit_callback).pack(side="right")
 
-        self._section(main, "Tipp-Verhalten", bg="card")
-        mode_row = ttk.Frame(main, style="Card.TFrame")
-        mode_row.pack(fill="x", padx=16)
-        self.vars["type_mode"] = tk.StringVar(value=self.cfg.get("type_mode") or "block")
-        ttk.Radiobutton(mode_row, text="Ganzen Block", variable=self.vars["type_mode"], value="block").pack(side="left", padx=(0, 12))
-        ttk.Radiobutton(mode_row, text="Zeichen für Zeichen", variable=self.vars["type_mode"], value="char").pack(side="left")
-
-        grid = ttk.Frame(main, style="Card.TFrame")
-        grid.pack(fill="x", padx=16, pady=8)
-        self.vars["delay_ms"] = tk.DoubleVar(value=float(self.cfg.get("delay_ms") or 50))
-        self.vars["char_delay_ms"] = tk.DoubleVar(value=float(self.cfg.get("char_delay_ms") or 18))
-        self.vars["jitter_pct"] = tk.DoubleVar(value=float(self.cfg.get("jitter_pct") or 15))
-        self.vars["burst_chars"] = tk.IntVar(value=int(self.cfg.get("burst_chars") or 0))
-        self.vars["login_timeout_s"] = tk.IntVar(value=int(self.cfg.get("login_timeout_s") or 180))
-        self.vars["prompt_timeout_s"] = tk.IntVar(value=int(self.cfg.get("prompt_timeout_s") or 8))
-        self._slider(grid, 0, "Pause nach Block (ms)", self.vars["delay_ms"], 0, 800)
-        self._slider(grid, 1, "Pause pro Zeichen (ms)", self.vars["char_delay_ms"], 0, 120)
-        self._slider(grid, 2, "Jitter %", self.vars["jitter_pct"], 0, 60)
-        self._slider(grid, 3, "Burst-Größe (0 = alles)", self.vars["burst_chars"], 0, 40)
-        self._slider(grid, 4, "Login-Timeout (s)", self.vars["login_timeout_s"], 20, 300)
-        self._slider(grid, 5, "Text-Suche Timeout (s)", self.vars["prompt_timeout_s"], 2, 30)
-
-        foot = ttk.Frame(self.root, style="Panel.TFrame")
-        foot.pack(fill="x", padx=16, pady=(0, 12))
-        ttk.Label(foot, text="Quit schließt Browser. Panic beendet nur die App.", style="Sub.TLabel").pack(side="left")
-        ttk.Button(foot, text="Beenden", style="Ghost.TButton", command=self.quit_callback).pack(side="right")
+        self.update_label = ttk.Label(inner, text=f"v{VERSION}  ·  Updates still", style="Muted.TLabel")
+        self.update_label.pack(anchor="w", padx=16, pady=(4, 2))
+        self.update_progress = ttk.Progressbar(inner, mode="determinate", maximum=100)
+        self.update_progress.pack(fill="x", padx=16, pady=(0, 16))
 
         self.root.protocol("WM_DELETE_WINDOW", self.quit_callback)
         self._apply_topmost()
@@ -605,22 +636,30 @@ class TypeHackApp:
         sys.exit(0)
 
     def login(self, email: str, password: str) -> None:
+        from selenium.webdriver.common.action_chains import ActionChains
+
         cfg = self.current_config()
         base = cfg["base_url"].rstrip("/")
         self.driver.get(base + LOGIN_PATH)
         timeout = int(cfg.get("login_timeout_s") or 180)
+        self.set_status("Captcha: klicken, dann lädt TypeHack die Seite neu…")
+        try:
+            first_present(self.driver, LOGIN_USER, timeout=3)
+        except Exception:
+            pass_altcha_then_reload(self.driver)
         user = WebDriverWait(self.driver, timeout).until(lambda d: first_present(d, LOGIN_USER, timeout=1.5))
         user.clear()
         user.send_keys(email)
         pw = first_present(self.driver, LOGIN_PASS, timeout=10)
         pw.clear()
-        pw.send_keys(password + Keys.ENTER)
+        pw.send_keys(password)
+        ActionChains(self.driver).send_keys(Keys.ENTER).perform()
         try:
             WebDriverWait(self.driver, 30).until(
                 EC.any_of(
                     EC.presence_of_element_located((By.CLASS_NAME, "ui-dialog-buttonset")),
-                    EC.url_contains("typewriter"),
                     EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='runLevel']")),
+                    EC.url_contains("runLevel"),
                 )
             )
         except TimeoutException:
@@ -629,11 +668,12 @@ class TypeHackApp:
             self.driver.get(base + LEVEL_PATH)
 
     def type_into_page(self, text: str) -> None:
-        try:
-            el = self.driver.switch_to.active_element
-            el.send_keys(text)
-        except Exception:
-            self.driver.find_element(By.TAG_NAME, "body").send_keys(text)
+        from selenium.webdriver.common.action_chains import ActionChains
+
+        actions = ActionChains(self.driver)
+        for ch in text:
+            actions.send_keys(keys_for_char(ch))
+        actions.perform()
 
     def start_typing(self) -> None:
         try:
@@ -647,23 +687,11 @@ class TypeHackApp:
                     continue
                 if self.root:
                     self.root.after(0, lambda t=language_text: self.preview.config(text=t))
-                mode = cfg.get("type_mode") or "block"
-                burst = int(cfg.get("burst_chars") or 0)
-                if mode == "char":
-                    for ch in language_text:
-                        if self.stop_flag.is_set():
-                            break
-                        self.type_into_page(ch)
-                        time.sleep(delay_seconds(cfg, char=True))
-                elif burst > 0:
-                    for i in range(0, len(language_text), burst):
-                        if self.stop_flag.is_set():
-                            break
-                        self.type_into_page(language_text[i : i + burst])
-                        time.sleep(delay_seconds(cfg))
-                else:
-                    self.type_into_page(language_text)
-                    time.sleep(delay_seconds(cfg))
+                for ch in language_text:
+                    if self.stop_flag.is_set():
+                        break
+                    self.type_into_page(ch)
+                    time.sleep(delay_seconds(cfg, char=True))
         except Exception as exc:
             self.set_status(f"Fehler: {exc}")
             print(f"An error occurred: {exc}")
