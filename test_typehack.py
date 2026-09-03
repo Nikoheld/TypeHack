@@ -37,10 +37,42 @@ class CredentialTests(unittest.TestCase):
         self.assertNotIn("unknown", cfg)
 
     def test_delay_seconds_no_jitter(self):
-        delay = th.delay_seconds({"delay_ms": 100, "jitter_pct": 0})
+        delay = th.delay_seconds({"delay_ms": 100, "jitter_pct": 0, "strokes_per_10min": 0})
         self.assertAlmostEqual(delay, 0.1)
-        char = th.delay_seconds({"char_delay_ms": 20, "jitter_pct": 0}, char=True)
+        char = th.delay_seconds({"char_delay_ms": 20, "jitter_pct": 0, "strokes_per_10min": 0}, char=True)
         self.assertAlmostEqual(char, 0.02)
+
+    def test_strokes_per_10min_interval(self):
+        self.assertEqual(th.clamp_strokes(2000), 2000)
+        self.assertEqual(th.clamp_strokes(50), 200)
+        self.assertEqual(th.clamp_strokes(99999), 8000)
+        # 2000 Anschläge / 10 min = 0.3 s Abstand
+        self.assertAlmostEqual(th.interval_seconds({"strokes_per_10min": 2000, "jitter_pct": 0}), 0.3)
+        self.assertAlmostEqual(th.interval_seconds({"strokes_per_10min": 600, "jitter_pct": 0}), 1.0)
+        self.assertAlmostEqual(
+            th.delay_seconds({"strokes_per_10min": 2000, "jitter_pct": 0}, char=True),
+            0.3,
+        )
+
+    def test_merge_config_keeps_strokes(self):
+        cfg = th.merge_config({"strokes_per_10min": 1800})
+        self.assertEqual(cfg["strokes_per_10min"], 1800)
+
+    def test_prompt_extractor_walks_text_nodes_and_nbsp(self):
+        self.assertIn("childNodes", th.EXTRACT_PROMPT_JS)
+        self.assertIn("spacey", th.EXTRACT_PROMPT_JS)
+        self.assertIn("\\u00a0", th.EXTRACT_PROMPT_JS)
+
+    def test_login_does_not_block_on_captcha_refresh(self):
+        import inspect
+
+        src = inspect.getsource(th.TypeHackApp.login)
+        self.assertNotIn("pass_altcha_then_reload", src)
+        self.assertIn("dismiss_overlays", src)
+        self.assertIn("nudge_captcha", src)
+        reload_src = inspect.getsource(th.pass_altcha_then_reload)
+        self.assertNotIn("driver.refresh", reload_src)
+        self.assertIn("fc-cta-consent", str(th.OVERLAY_CLICK))
 
     def test_load_config_missing_file(self):
         cfg = th.load_config(Path("/tmp/typehack-missing-config.json"))

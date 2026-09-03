@@ -33,7 +33,7 @@ def app_dir() -> Path:
 BASE_DIR = app_dir()
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 CONFIG_FILE = BASE_DIR / "config.json"
-VERSION = "2.3.1"
+VERSION = "2.4.0"
 
 PRESET_URLS = {
     "Österreich (at4)": "https://at4.typewriter.at",
@@ -53,6 +53,7 @@ DEFAULT_CONFIG = {
     "type_mode": "char",
     "delay_ms": 50,
     "char_delay_ms": 18,
+    "strokes_per_10min": 2000,
     "jitter_pct": 0,
     "burst_chars": 0,
     "login_timeout_s": 180,
@@ -77,7 +78,30 @@ LOGIN_PASS = [
     (By.ID, "LoginForm_pw"),
     (By.ID, "LoginForm_password"),
     (By.NAME, "LoginForm[password]"),
+    (By.NAME, "LoginForm[pw]"),
     (By.CSS_SELECTOR, "input[type='password']"),
+]
+LOGIN_SUBMIT = [
+    (By.ID, "login-submit-btn"),
+    (By.CSS_SELECTOR, "#login-form input[type='submit']"),
+    (By.CSS_SELECTOR, "input[type='submit'][value='Login']"),
+    (By.CSS_SELECTOR, "button[type='submit']"),
+]
+OVERLAY_CLICK = [
+    (By.CSS_SELECTOR, "button.fc-cta-consent"),
+    (By.CSS_SELECTOR, "button[aria-label='Consent']"),
+    (By.CSS_SELECTOR, "button.fc-data-preferences-accept-all"),
+    (By.CSS_SELECTOR, "button[aria-label='Accept all']"),
+    (By.XPATH, "//button[normalize-space()='Consent' or normalize-space()='Zustimmen' or contains(., 'Alle akzeptieren') or contains(., 'Accept all')]"),
+]
+CAPTCHA_CLICK = [
+    (By.CSS_SELECTOR, "#chal-form button"),
+    (By.CSS_SELECTOR, "form#chal-form button"),
+    (By.CSS_SELECTOR, ".altcha, .altcha-checkbox, button.altcha"),
+    (By.CSS_SELECTOR, "#altcha"),
+    (By.CSS_SELECTOR, "input[name='altcha']"),
+    (By.XPATH, "//button[contains(., 'Roboter') or contains(., 'Captcha') or contains(., 'Verify') or contains(., 'Mensch')]"),
+    (By.CSS_SELECTOR, "label:has(input[type='checkbox'])"),
 ]
 PROMPT_SELECTORS = [
     (By.CSS_SELECTOR, "#typewriter-text"),
@@ -137,7 +161,26 @@ def save_credentials(email: str, password: str, path: Path = CREDENTIALS_FILE) -
     path.write_text(json.dumps({"email": email, "password": password}, indent=2), encoding="utf-8")
 
 
+def clamp_strokes(n) -> int:
+    try:
+        value = int(float(n))
+    except Exception:
+        value = 2000
+    return max(200, min(8000, value))
+
+
+def interval_seconds(cfg: dict) -> float:
+    """Seconds between keystrokes from Anschläge / 10 minutes."""
+    n = clamp_strokes(cfg.get("strokes_per_10min") or 0)
+    base = 600.0 / n
+    jitter = max(0.0, min(100.0, float(cfg.get("jitter_pct") or 0))) / 100.0
+    factor = 1.0 + random.uniform(-jitter, jitter) if jitter else 1.0
+    return max(0.02, base * factor)
+
+
 def delay_seconds(cfg: dict, *, char: bool = False) -> float:
+    if cfg.get("strokes_per_10min"):
+        return interval_seconds(cfg)
     base_ms = float(cfg.get("char_delay_ms") if char else cfg.get("delay_ms") or 0)
     jitter = max(0.0, min(100.0, float(cfg.get("jitter_pct") or 0))) / 100.0
     factor = 1.0 + random.uniform(-jitter, jitter) if jitter else 1.0
@@ -146,19 +189,106 @@ def delay_seconds(cfg: dict, *, char: bool = False) -> float:
 
 def first_present(driver, locators, timeout: float = 2.0):
     end = time.time() + timeout
-    last = None
     while time.time() < end:
-        for by, value in locators:
-            try:
-                el = driver.find_element(by, value)
-                if el.is_displayed():
-                    return el
-            except Exception as exc:  # noqa: BLE001
-                last = exc
-        time.sleep(0.2)
-    if last:
-        raise last
+        el = first_visible(driver, locators)
+        if el is not None:
+            return el
+        time.sleep(0.12)
     raise TimeoutException("Kein passendes Element gefunden")
+
+
+def first_visible(driver, locators, *, enabled: bool = False):
+    for by, value in locators:
+        try:
+            for el in driver.find_elements(by, value):
+                try:
+                    if not el.is_displayed():
+                        continue
+                    if enabled and not el.is_enabled():
+                        continue
+                    return el
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return None
+
+
+def dismiss_overlays(driver) -> bool:
+    clicked = False
+    for by, value in OVERLAY_CLICK:
+        try:
+            els = driver.find_elements(by, value)
+        except Exception:
+            continue
+        for el in els:
+            try:
+                if el.is_displayed():
+                    driver.execute_script("arguments[0].click();", el)
+                    clicked = True
+            except Exception:
+                continue
+    return clicked
+
+
+def nudge_captcha(driver) -> bool:
+    """One cheap click if a captcha control is already there. Never blocks."""
+    for by, value in CAPTCHA_CLICK:
+        try:
+            els = driver.find_elements(by, value)
+        except Exception:
+            continue
+        for el in els:
+            try:
+                if el.is_displayed():
+                    driver.execute_script("arguments[0].click();", el)
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def fill_input(driver, el, text: str) -> None:
+    try:
+        el.click()
+    except Exception:
+        try:
+            driver.execute_script("arguments[0].focus();", el)
+        except Exception:
+            pass
+    try:
+        el.clear()
+        el.send_keys(text)
+        if (el.get_attribute("value") or "") == text:
+            return
+    except Exception:
+        pass
+    driver.execute_script(
+        "var e=arguments[0],v=arguments[1];"
+        "e.focus(); e.value=v;"
+        "e.dispatchEvent(new Event('input',{bubbles:true}));"
+        "e.dispatchEvent(new Event('change',{bubbles:true}));",
+        el,
+        text,
+    )
+
+
+def logged_in_markers(driver) -> bool:
+    if first_visible(driver, LOGIN_PASS):
+        return False
+    url = driver.current_url or ""
+    if "site/login" in url:
+        return False
+    if any(bit in url for bit in ("runLevel", "practise")):
+        return True
+    try:
+        if driver.find_elements(By.CLASS_NAME, "ui-dialog-buttonset"):
+            return True
+        if driver.find_elements(By.CSS_SELECTOR, "a[href*='site/logout']"):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def normalize_prompt_text(raw: str) -> str:
@@ -173,22 +303,45 @@ def keys_for_char(ch: str):
     return ch
 
 
+EXTRACT_PROMPT_JS = r"""
+var root = arguments[0];
+function vis(el) {
+  if (!el || el.nodeType !== 1) return true;
+  var st = window.getComputedStyle(el);
+  if (!st) return true;
+  if (st.display === 'none' || st.visibility === 'hidden') return false;
+  return true;
+}
+function spacey(el) {
+  var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
+  if (/space|blank|gap|nbsp|whitespace|word-?sep/.test(cls)) return true;
+  var html = el.innerHTML || '';
+  var t = el.textContent || '';
+  if (/&nbsp;|&#160;|&#xa0;/i.test(html) && t.replace(/\s/g, '') === '') return true;
+  if (t === '\u00a0' || t === '\u202f' || t === '\u2002' || t === '\u2003' || t === '\u2009') return true;
+  if ((t === '' || t === ' ') && el.children.length === 0 && el.offsetWidth >= 4) return true;
+  return false;
+}
+var out = [];
+function walk(node) {
+  if (!node) return;
+  if (node.nodeType === 3) { out.push(node.nodeValue); return; }
+  if (node.nodeType !== 1) return;
+  if (!vis(node)) return;
+  if (spacey(node) && node.childElementCount === 0) { out.push(' '); return; }
+  var kids = node.childNodes;
+  if (!kids.length) { out.push(node.textContent || ''); return; }
+  for (var i = 0; i < kids.length; i++) walk(kids[i]);
+}
+walk(root);
+return out.join('');
+"""
+
+
 def prompt_text(driver, timeout: float = 8.0) -> str:
     el = first_present(driver, PROMPT_SELECTORS, timeout=timeout)
     try:
-        js = (
-            "var e=arguments[0];"
-            "var spans=e.querySelectorAll('span');"
-            "if(spans.length){"
-            "  return Array.prototype.map.call(spans,function(s){"
-            "    var t=s.textContent;"
-            "    if(t==null||t===''||t===' '||t==='\\u00a0') return ' ';"
-            "    return t;"
-            "  }).join('');"
-            "}"
-            "return (e.textContent||'');"
-        )
-        text = driver.execute_script(js, el) or ""
+        text = driver.execute_script(EXTRACT_PROMPT_JS, el) or ""
     except Exception:
         text = el.get_attribute("textContent") or el.text or ""
     text = normalize_prompt_text(text).strip("\n\r")
@@ -198,30 +351,70 @@ def prompt_text(driver, timeout: float = 8.0) -> str:
 
 
 def pass_altcha_then_reload(driver) -> bool:
-    """Click the ALTCHA/captcha control once, then reload — that is how typewriter.at lets you in."""
-    selectors = [
-        (By.CSS_SELECTOR, "#chal-form button"),
-        (By.CSS_SELECTOR, "form#chal-form button"),
-        (By.CSS_SELECTOR, ".altcha, .altcha-checkbox, button.altcha"),
-        (By.CSS_SELECTOR, "#altcha"),
-        (By.CSS_SELECTOR, "input[name='altcha']"),
-        (By.CSS_SELECTOR, "#chal-form"),
-        (By.XPATH, "//button[contains(., 'Roboter') or contains(., 'Captcha') or contains(., 'Verify') or contains(., 'Mensch')]"),
-        (By.CSS_SELECTOR, "input[type='checkbox']"),
-    ]
-    clicked = False
-    for by, value in selectors:
-        try:
-            el = WebDriverWait(driver, 4).until(EC.element_to_be_clickable((by, value)))
-            driver.execute_script("arguments[0].click();", el)
-            clicked = True
-            break
-        except Exception:
-            continue
-    time.sleep(1.2)
-    driver.refresh()
-    time.sleep(0.8)
-    return clicked
+    """Kept for compatibility: never wait, never refresh — that caused the 20s login delay."""
+    return nudge_captcha(driver)
+
+
+def focus_typer(driver) -> None:
+    try:
+        driver.execute_script(
+            "var sels=['#typewriter-text','.typewriter-text','#textToType',"
+            "'.current-line','.tw-text','#twCanvas','canvas','body'];"
+            "for (var i=0;i<sels.length;i++){"
+            "  var e=document.querySelector(sels[i]);"
+            "  if(e){ try{e.click();}catch(x){} try{e.focus();}catch(x){} return; }"
+            "}"
+        )
+    except Exception:
+        pass
+
+
+def type_char(driver, ch: str) -> None:
+    """One real keystroke. Space must be keyCode 32 / code Space — Keys.SPACE is not enough."""
+    if ch in ("\n", "\r"):
+        key, code, vk, text = "Enter", "Enter", 13, "\r"
+    elif ch in (" ", "\xa0", "\u202f", "\u2009"):
+        key, code, vk, text = " ", "Space", 32, " "
+    else:
+        key = ch
+        code = f"Key{ch.upper()}" if len(ch) == 1 and ch.isalpha() else ch
+        vk = ord(ch) if len(ch) == 1 else 0
+        text = ch
+    try:
+        payload = {
+            "key": key,
+            "code": code,
+            "windowsVirtualKeyCode": vk,
+            "nativeVirtualKeyCode": vk,
+            "text": text,
+            "unmodifiedText": text,
+        }
+        driver.execute_cdp_cmd("Input.dispatchKeyEvent", {"type": "keyDown", **payload})
+        driver.execute_cdp_cmd("Input.dispatchKeyEvent", {"type": "char", "text": text, "unmodifiedText": text})
+        driver.execute_cdp_cmd("Input.dispatchKeyEvent", {"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk})
+        return
+    except Exception:
+        pass
+    from selenium.webdriver.common.action_chains import ActionChains
+
+    try:
+        driver.execute_script(
+            "var ch=arguments[0];"
+            "var isSp=ch===' '||ch==='\\u00a0';"
+            "var key=isSp?' ':ch;"
+            "var code=isSp?'Space':('Key'+(ch.toUpperCase?ch.toUpperCase():ch));"
+            "var kc=isSp?32:ch.charCodeAt(0);"
+            "var t=document.activeElement||document.body;"
+            "var o={key:key,code:code,keyCode:kc,which:kc,charCode:kc,bubbles:true,cancelable:true};"
+            "t.dispatchEvent(new KeyboardEvent('keydown',o));"
+            "t.dispatchEvent(new KeyboardEvent('keypress',o));"
+            "document.dispatchEvent(new KeyboardEvent('keydown',o));"
+            "document.dispatchEvent(new KeyboardEvent('keypress',o));",
+            text,
+        )
+    except Exception:
+        pass
+    ActionChains(driver).send_keys(text).perform()
 
 
 def _stealth(options) -> None:
@@ -278,8 +471,8 @@ class TypeHackApp:
         accent = str(self.cfg.get("theme_accent") or PALETTE["accent"])
         self.root = tk.Tk()
         self.root.title("TypeHack")
-        self.root.geometry("420x560")
-        self.root.minsize(380, 480)
+        self.root.geometry("420x620")
+        self.root.minsize(380, 520)
         self.root.configure(bg=PALETTE["bg"])
 
         style = ttk.Style(self.root)
@@ -350,6 +543,7 @@ class TypeHackApp:
         self.vars["type_mode"] = tk.StringVar(value="char")
         self.vars["delay_ms"] = tk.DoubleVar(value=50)
         self.vars["char_delay_ms"] = tk.DoubleVar(value=float(self.cfg.get("char_delay_ms") or 18))
+        self.vars["strokes_per_10min"] = tk.IntVar(value=clamp_strokes(self.cfg.get("strokes_per_10min") or 2000))
         self.vars["jitter_pct"] = tk.DoubleVar(value=0)
         self.vars["burst_chars"] = tk.IntVar(value=0)
         self.vars["login_timeout_s"] = tk.IntVar(value=180)
@@ -364,12 +558,47 @@ class TypeHackApp:
         preset.pack(fill="x", padx=16, pady=(0, 6))
         preset.bind("<<ComboboxSelected>>", self._on_preset)
 
-        ttk.Label(inner, text="Tempo (links = schnell)", style="Muted.TLabel").pack(anchor="w", padx=16)
-        ttk.Scale(inner, from_=1, to=80, variable=self.vars["char_delay_ms"], orient="horizontal").pack(fill="x", padx=16)
+        ttk.Label(inner, text="Anschläge / 10 Minuten", style="Muted.TLabel").pack(anchor="w", padx=16)
+        pace = ttk.Frame(inner, style="Card.TFrame")
+        pace.pack(fill="x", padx=16, pady=(0, 2))
+        self.strokes_entry = tk.Entry(
+            pace,
+            textvariable=self.vars["strokes_per_10min"],
+            width=7,
+            bg=PALETTE["panel"],
+            fg=PALETTE["text"],
+            insertbackground=PALETTE["text"],
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=PALETTE["line"],
+            justify="center",
+        )
+        self.strokes_entry.pack(side="left")
+        ttk.Scale(
+            pace,
+            from_=400,
+            to=5000,
+            variable=self.vars["strokes_per_10min"],
+            orient="horizontal",
+        ).pack(side="left", fill="x", expand=True, padx=(8, 0))
+        self.pace_label = ttk.Label(inner, text="", style="Muted.TLabel")
+        self.pace_label.pack(anchor="w", padx=16, pady=(0, 4))
+
+        def _pace(*_a):
+            try:
+                n = clamp_strokes(self.vars["strokes_per_10min"].get())
+            except Exception:
+                return
+            per_s = n / 600.0
+            ms = int(round(600000 / n))
+            self.pace_label.config(text=f"≈ {per_s:.2f} Anschläge/s  ·  {ms} ms Abstand")
+
+        self.vars["strokes_per_10min"].trace_add("write", _pace)
+        _pace()
 
         self.preview = tk.Label(
             inner,
-            text="Verbinden → Captcha klicken (TypeHack lädt neu) → Level wählen → Start.",
+            text="Verbinden → Captcha lösen → Login startet sofort → Level wählen → Start.",
             wraplength=360,
             justify="left",
             bg=PALETTE["panel"],
@@ -471,6 +700,7 @@ class TypeHackApp:
                 "type_mode": self.vars["type_mode"].get(),
                 "delay_ms": float(self.vars["delay_ms"].get()),
                 "char_delay_ms": float(self.vars["char_delay_ms"].get()),
+                "strokes_per_10min": clamp_strokes(self.vars["strokes_per_10min"].get()),
                 "jitter_pct": float(self.vars["jitter_pct"].get()),
                 "burst_chars": int(float(self.vars["burst_chars"].get())),
                 "login_timeout_s": int(float(self.vars["login_timeout_s"].get())),
@@ -570,7 +800,7 @@ class TypeHackApp:
             return
         self.save_settings()
         self.connect_button.config(state="disabled")
-        self.set_status("Starte Browser… Captcha im Fenster lösen, falls nötig.")
+        self.set_status("Starte Browser… Captcha lösen, Login kommt sofort danach.")
         threading.Thread(target=self._connect_worker, args=(email, password), daemon=True).start()
 
     def _connect_worker(self, email: str, password: str) -> None:
@@ -636,47 +866,65 @@ class TypeHackApp:
         sys.exit(0)
 
     def login(self, email: str, password: str) -> None:
-        from selenium.webdriver.common.action_chains import ActionChains
-
         cfg = self.current_config()
         base = cfg["base_url"].rstrip("/")
         self.driver.get(base + LOGIN_PATH)
         timeout = int(cfg.get("login_timeout_s") or 180)
-        self.set_status("Captcha: klicken, dann lädt TypeHack die Seite neu…")
-        try:
-            first_present(self.driver, LOGIN_USER, timeout=3)
-        except Exception:
-            pass_altcha_then_reload(self.driver)
-        user = WebDriverWait(self.driver, timeout).until(lambda d: first_present(d, LOGIN_USER, timeout=1.5))
-        user.clear()
-        user.send_keys(email)
-        pw = first_present(self.driver, LOGIN_PASS, timeout=10)
-        pw.clear()
-        pw.send_keys(password)
-        ActionChains(self.driver).send_keys(Keys.ENTER).perform()
-        try:
-            WebDriverWait(self.driver, 30).until(
-                EC.any_of(
-                    EC.presence_of_element_located((By.CLASS_NAME, "ui-dialog-buttonset")),
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='runLevel']")),
-                    EC.url_contains("runLevel"),
-                )
-            )
-        except TimeoutException:
+        deadline = time.time() + timeout
+        submitted = False
+        last_note = ""
+        while time.time() < deadline:
+            dismiss_overlays(self.driver)
+            if logged_in_markers(self.driver):
+                self.set_status("Eingeloggt.")
+                break
+            user = first_visible(self.driver, LOGIN_USER)
+            pw = first_visible(self.driver, LOGIN_PASS)
+            if user and pw and not submitted:
+                self.set_status("Login-Felder da — melde an…")
+                fill_input(self.driver, user, email)
+                fill_input(self.driver, pw, password)
+                btn = first_visible(self.driver, LOGIN_SUBMIT)
+                try:
+                    if btn is not None:
+                        try:
+                            btn.click()
+                        except Exception:
+                            self.driver.execute_script("arguments[0].click();", btn)
+                    else:
+                        pw.send_keys(Keys.ENTER)
+                except Exception:
+                    try:
+                        self.driver.execute_script(
+                            "var e=arguments[0]; if(e.form) e.form.submit();",
+                            pw,
+                        )
+                    except Exception:
+                        pass
+                submitted = True
+                self.set_status("Login abgeschickt…")
+            elif not submitted:
+                nudge_captcha(self.driver)
+                note = "Captcha im Browser lösen — Login startet sofort danach."
+                if note != last_note:
+                    self.set_status(note)
+                    last_note = note
+            time.sleep(0.12)
+        else:
             self.set_status("Login-Wartezeit vorbei — wenn du drin bist, Level manuell öffnen.")
         if cfg.get("open_level_page"):
-            self.driver.get(base + LEVEL_PATH)
+            try:
+                self.driver.get(base + LEVEL_PATH)
+            except Exception:
+                pass
 
     def type_into_page(self, text: str) -> None:
-        from selenium.webdriver.common.action_chains import ActionChains
-
-        actions = ActionChains(self.driver)
         for ch in text:
-            actions.send_keys(keys_for_char(ch))
-        actions.perform()
+            type_char(self.driver, ch)
 
     def start_typing(self) -> None:
         try:
+            focus_typer(self.driver)
             while not self.stop_flag.is_set():
                 cfg = self.current_config()
                 try:
@@ -687,11 +935,12 @@ class TypeHackApp:
                     continue
                 if self.root:
                     self.root.after(0, lambda t=language_text: self.preview.config(text=t))
+                focus_typer(self.driver)
                 for ch in language_text:
                     if self.stop_flag.is_set():
                         break
-                    self.type_into_page(ch)
-                    time.sleep(delay_seconds(cfg, char=True))
+                    type_char(self.driver, ch)
+                    time.sleep(interval_seconds(cfg))
         except Exception as exc:
             self.set_status(f"Fehler: {exc}")
             print(f"An error occurred: {exc}")

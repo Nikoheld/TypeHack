@@ -5,13 +5,15 @@ Hilfsprogramm für [typewriter.at](https://www.typewriter.at) (öffentliche Inst
 ## Was neu ist
 
 - **Kein mitgelieferter `msedgedriver.exe` mehr.** Selenium 4.27+ (Selenium Manager) holt den Treiber passend zur installierten Edge- oder Chrome-Version.
-- Login wartet auf das Formular — auch wenn typewriter.at zuerst eine **ALTCHA**-Prüfung zeigt (im Browser lösen).
+- **Anschläge / 10 Minuten** einstellen — TypeHack tippt in genau dem Tempo.
+- Login füllt das Formular **sofort**, sobald Captcha/Consent weg ist (kein 20s-Warten, kein Seiten-Reload).
+- Leerzeichen werden als echte Space-Taste (keyCode 32) gesendet, nicht als leerer Text.
 - Tippen geht über das Browser-Fenster (`send_keys`), nicht mehr über pynput ins falsche Fenster.
 - Start/Stop ist nicht mehr verdreht. Credentials liegen in `credentials.json` (steht in `.gitignore`).
 
 ## Windows: Installer (kein Python nötig)
 
-1. Unter [Releases](https://github.com/Nikoheld/TypeHack/releases) **TypeHack-Setup-2.3.1.exe** laden.
+1. Unter [Releases](https://github.com/Nikoheld/TypeHack/releases) **TypeHack-Setup-2.4.0.exe** laden.
 2. Installer starten (legt TypeHack nach `%LOCALAPPDATA%\TypeHack`, Desktop-Verknüpfung optional).
 3. **TypeHack** öffnen — Microsoft Edge ist auf Windows 10/11 schon da.
 
