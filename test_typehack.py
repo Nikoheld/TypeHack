@@ -90,13 +90,55 @@ class UpdaterTests(unittest.TestCase):
     def test_sha256_file(self):
         import updater
         import tempfile
+        import hashlib
 
         with tempfile.NamedTemporaryFile(delete=False) as fh:
             fh.write(b"typehack")
             name = fh.name
-        import hashlib
 
         self.assertEqual(updater.sha256_file(Path(name)), hashlib.sha256(b"typehack").hexdigest())
+
+    def test_installer_batch_never_uses_empty_start_title(self):
+        import updater
+
+        setup = Path(r"C:\Users\Niko\AppData\Local\Temp\TypeHack-Setup-2.3.1.exe")
+        restart = Path(r"C:\Users\Niko\AppData\Local\TypeHack\TypeHack.exe")
+        text = updater.installer_batch_text(setup, restart)
+        self.assertNotIn('start ""', text)
+        self.assertNotIn("start ''", text)
+        self.assertIn('start "TypeHack-Setup" /wait', text)
+        self.assertIn('start "TypeHack"', text)
+        self.assertIn(str(setup), text)
+        self.assertIn("/VERYSILENT", text)
+
+    def test_launch_installer_missing_file(self):
+        import updater
+        from unittest import mock
+
+        missing = Path(tempfile.gettempdir()) / "TypeHack-missing-setup.exe"
+        with mock.patch.object(updater, "_is_windows", return_value=True):
+            with self.assertRaises(FileNotFoundError):
+                updater.launch_installer(missing)
+
+    def test_launch_installer_writes_batch_without_empty_title(self):
+        import updater
+        from unittest import mock
+
+        tmp = Path(tempfile.mkdtemp())
+        setup = tmp / "TypeHack-Setup-2.3.1.exe"
+        setup.write_bytes(b"MZ")
+        restart = tmp / "TypeHack.exe"
+        restart.write_bytes(b"MZ")
+        with mock.patch.object(updater, "_is_windows", return_value=True):
+            with mock.patch.object(updater.subprocess, "Popen") as popen:
+                updater.launch_installer(setup, restart_exe=restart)
+        popen.assert_called_once()
+        argv = popen.call_args[0][0]
+        self.assertEqual(argv[1], "/c")
+        bat = Path(argv[2])
+        body = bat.read_text(encoding="utf-8")
+        self.assertNotIn('start ""', body)
+        self.assertIn('start "TypeHack-Setup" /wait', body)
 
 
 if __name__ == "__main__":

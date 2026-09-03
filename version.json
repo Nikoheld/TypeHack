@@ -1,6 +1,6 @@
 {
-  "version": "2.3.0",
-  "installer_url": "https://github.com/Nikoheld/TypeHack/releases/download/v2.3.0/TypeHack-Setup-2.3.0.exe",
-  "sha256": "add3ac80d59f23db1fa1f76f8ff8629af5533928401810ada796cae6d859ddc2",
-  "notes": "Simpler UI, spaces, captcha reload, silent updates."
+  "version": "2.3.1",
+  "installer_url": "https://github.com/Nikoheld/TypeHack/releases/download/v2.3.1/TypeHack-Setup-2.3.1.exe",
+  "sha256": "b1e82f80c9221970523e183ee1e0f4b7cdbce77ae40b895abec6579e32ec0864",
+  "notes": "Fix auto-update on German Windows (start empty title was file \\\\). 2.2.0 cannot self-update — run Setup once."
 }

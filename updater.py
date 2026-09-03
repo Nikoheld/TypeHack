@@ -137,14 +137,59 @@ def download_installer(url: str, dest: Path, progress=None, timeout: int = 120) 
     return dest
 
 
-def launch_installer(setup: Path, restart_exe: Path | None = None) -> None:
-    setup = setup.resolve()
-    if os.name != "nt":
-        return
-    wait = f'start "" /wait "{setup}" /VERYSILENT /NORESTART /CLOSEAPPLICATIONS /SUPPRESSMSGBOXES'
+# Windows process flags (numeric so this module still imports on Linux).
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def installer_batch_text(setup: Path, restart_exe: Path | None = None) -> str:
+    """cmd script that runs Setup, then optionally relaunches TypeHack.
+
+    Uses a non-empty ``start "title"`` window title. An empty title (``start ""``)
+    is parsed on German Windows as the file ``\\`` and shows:
+    Die Datei "\\" wurde nicht gefunden.
+    """
+    setup = Path(setup)
+    lines = [
+        "@echo off",
+        "setlocal EnableExtensions",
+        "ping -n 3 127.0.0.1 >nul",
+        (
+            f'start "TypeHack-Setup" /wait "{setup}" '
+            "/VERYSILENT /NORESTART /CLOSEAPPLICATIONS /SUPPRESSMSGBOXES"
+        ),
+    ]
     if restart_exe:
-        wait += f' && start "" "{restart_exe}"'
-    subprocess.Popen(["cmd", "/c", wait], close_fds=True)
+        restart_exe = Path(restart_exe)
+        lines.append(f'if exist "{restart_exe}" start "TypeHack" "{restart_exe}"')
+    lines.append("endlocal")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def launch_installer(setup: Path, restart_exe: Path | None = None) -> None:
+    setup = Path(setup).resolve()
+    if not _is_windows():
+        return
+    if not setup.is_file():
+        raise FileNotFoundError(setup)
+    restart = Path(restart_exe).resolve() if restart_exe else None
+    bat = Path(tempfile.gettempdir()) / "TypeHack-apply-update.cmd"
+    bat.write_bytes(installer_batch_text(setup, restart).encode("utf-8"))
+    comspec = os.environ.get("COMSPEC") or "cmd.exe"
+    subprocess.Popen(
+        [comspec, "/c", str(bat)],
+        close_fds=True,
+        cwd=str(setup.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=_DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW,
+    )
 
 
 def apply_update(info: dict, progress=None) -> Path:

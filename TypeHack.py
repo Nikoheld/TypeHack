@@ -33,7 +33,7 @@ def app_dir() -> Path:
 BASE_DIR = app_dir()
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 CONFIG_FILE = BASE_DIR / "config.json"
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 
 PRESET_URLS = {
     "Österreich (at4)": "https://at4.typewriter.at",
