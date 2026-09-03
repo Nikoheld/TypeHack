@@ -1,5 +1,5 @@
 #define MyAppName "TypeHack"
-#define MyAppVersion "2.1.0"
+#define MyAppVersion "2.2.0"
 #define MyAppPublisher "Nikoheld"
 #define MyAppURL "https://github.com/Nikoheld/TypeHack"
 #define MyAppExeName "TypeHack.exe"
@@ -23,6 +23,9 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
+CloseApplications=force
+RestartApplications=yes
+UsePreviousAppDir=yes
 SetupIconFile=
 LicenseFile=
 

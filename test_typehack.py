@@ -51,5 +51,44 @@ class CredentialTests(unittest.TestCase):
         self.assertTrue(hasattr(th, "VERSION"))
 
 
+class UpdaterTests(unittest.TestCase):
+    def test_parse_and_compare(self):
+        import updater
+
+        self.assertEqual(updater.parse_version("v2.2.0"), (2, 2, 0))
+        self.assertTrue(updater.is_newer("2.2.1", "2.2.0"))
+        self.assertFalse(updater.is_newer("2.2.0", "2.2.0"))
+        self.assertFalse(updater.is_newer("2.1.9", "2.2.0"))
+
+    def test_pick_setup_asset(self):
+        import updater
+
+        release = {
+            "assets": [
+                {"name": "notes.txt", "size": 10, "browser_download_url": "http://x/notes"},
+                {
+                    "name": "TypeHack-Setup-2.2.0.exe",
+                    "size": 40000000,
+                    "browser_download_url": "http://x/setup.exe",
+                    "digest": "sha256:abc",
+                },
+            ]
+        }
+        asset = updater.pick_setup_asset(release)
+        self.assertEqual(asset["name"], "TypeHack-Setup-2.2.0.exe")
+        self.assertEqual(updater.digest_from_asset(asset), "abc")
+
+    def test_sha256_file(self):
+        import updater
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(delete=False) as fh:
+            fh.write(b"typehack")
+            name = fh.name
+        import hashlib
+
+        self.assertEqual(updater.sha256_file(Path(name)), hashlib.sha256(b"typehack").hexdigest())
+
+
 if __name__ == "__main__":
     unittest.main()

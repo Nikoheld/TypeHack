@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas, binaries, hiddenimports = collect_all("selenium")
 hiddenimports += collect_submodules("selenium")
-hiddenimports += ["tkinter", "tkinter.ttk", "colorama"]
+hiddenimports += ["tkinter", "tkinter.ttk", "colorama", "updater"]
 
 a = Analysis(
     ["TypeHack.py"],

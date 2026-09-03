@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 
+import updater
 from colorama import Fore, Style, init as colorama_init
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
@@ -32,7 +33,7 @@ def app_dir() -> Path:
 BASE_DIR = app_dir()
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 CONFIG_FILE = BASE_DIR / "config.json"
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 PRESET_URLS = {
     "Österreich (at4)": "https://at4.typewriter.at",
@@ -57,6 +58,8 @@ DEFAULT_CONFIG = {
     "login_timeout_s": 180,
     "prompt_timeout_s": 8,
     "theme_accent": "#6ee7b7",
+    "auto_update_check": True,
+    "auto_install_updates": False,
 }
 
 LOGIN_PATH = "/index.php?r=site/login"
@@ -291,8 +294,23 @@ class TypeHackApp:
         ttk.Checkbutton(side, text="Nach Login Level-Seite öffnen", variable=self.vars["open_level_page"]).pack(anchor="w", padx=14, pady=2)
         ttk.Checkbutton(side, text="Nach Login automatisch tippen", variable=self.vars["auto_start"]).pack(anchor="w", padx=14, pady=2)
 
+        self._section(side, "Updates")
+        self.vars["auto_update_check"] = tk.BooleanVar(value=bool(self.cfg.get("auto_update_check", True)))
+        self.vars["auto_install_updates"] = tk.BooleanVar(value=bool(self.cfg.get("auto_install_updates", False)))
+        ttk.Checkbutton(side, text="Beim Start prüfen", variable=self.vars["auto_update_check"]).pack(anchor="w", padx=14, pady=2)
+        ttk.Checkbutton(side, text="Updates still installieren", variable=self.vars["auto_install_updates"]).pack(
+            anchor="w", padx=14, pady=2
+        )
+        self.update_label = ttk.Label(side, text=f"Installiert: v{VERSION}", style="Muted.TLabel")
+        self.update_label.pack(anchor="w", padx=14, pady=(4, 2))
+        ttk.Button(side, text="Jetzt prüfen", style="Ghost.TButton", command=lambda: self.check_updates(False)).pack(
+            fill="x", padx=14, pady=4
+        )
+        self.update_progress = ttk.Progressbar(side, mode="determinate", maximum=100)
+        self.update_progress.pack(fill="x", padx=14, pady=(0, 8))
+
         ttk.Button(side, text="Einstellungen speichern", style="Ghost.TButton", command=self.save_settings).pack(
-            fill="x", padx=14, pady=(12, 16)
+            fill="x", padx=14, pady=(4, 16)
         )
 
         # Main column
@@ -351,6 +369,8 @@ class TypeHackApp:
 
         self.root.protocol("WM_DELETE_WINDOW", self.quit_callback)
         self._apply_topmost()
+        if self.cfg.get("auto_update_check", True):
+            self.root.after(1800, lambda: self.check_updates(silent=True))
 
     def _section(self, parent, title: str, bg: str = "card") -> None:
         from tkinter import ttk
@@ -424,6 +444,8 @@ class TypeHackApp:
                 "burst_chars": int(float(self.vars["burst_chars"].get())),
                 "login_timeout_s": int(float(self.vars["login_timeout_s"].get())),
                 "prompt_timeout_s": int(float(self.vars["prompt_timeout_s"].get())),
+                "auto_update_check": bool(self.vars["auto_update_check"].get()),
+                "auto_install_updates": bool(self.vars["auto_install_updates"].get()),
             }
         )
         return cfg
@@ -446,6 +468,65 @@ class TypeHackApp:
     def set_badge(self, text: str) -> None:
         if self.root:
             self.root.after(0, lambda: self.badge.config(text=text))
+
+    def check_updates(self, silent: bool = False) -> None:
+        if self.typing:
+            if not silent:
+                self.set_status("Update wartet, bis das Tippen stoppt.")
+            return
+        threading.Thread(target=self._check_update_worker, args=(silent,), daemon=True).start()
+
+    def _check_update_worker(self, silent: bool) -> None:
+        try:
+            info = updater.fetch_latest()
+        except Exception as exc:
+            if not silent:
+                self.set_status(f"Update-Check fehlgeschlagen: {exc}")
+            return
+        if not info or not info.get("version"):
+            if not silent:
+                self.set_status(f"TypeHack {VERSION} — kein Release gefunden.")
+            return
+        if not updater.is_newer(str(info["version"]), VERSION):
+            if not silent:
+                self.set_status(f"TypeHack {VERSION} ist aktuell.")
+            if self.update_label:
+                self.root.after(0, lambda: self.update_label.config(text=f"Installiert: v{VERSION} (aktuell)"))
+            return
+        self.root.after(0, lambda: self._offer_update(info, silent))
+
+    def _offer_update(self, info: dict, silent: bool) -> None:
+        ver = info.get("version")
+        self.update_label.config(text=f"Neu: v{ver}")
+        auto = bool(self.vars["auto_install_updates"].get())
+        if not auto:
+            from tkinter import messagebox
+
+            if not messagebox.askyesno(
+                "TypeHack Update",
+                f"Version {ver} ist verfügbar (jetzt {VERSION}).\nJetzt herunterladen und installieren?",
+            ):
+                self.set_status(f"Update {ver} übersprungen.")
+                return
+        self.set_status(f"Lade TypeHack {ver}…")
+        threading.Thread(target=self._download_update_worker, args=(info,), daemon=True).start()
+
+    def _download_update_worker(self, info: dict) -> None:
+        def progress(done: int, total: int) -> None:
+            pct = int(done * 100 / total) if total else 0
+            if self.root:
+                self.root.after(0, lambda p=pct: self.update_progress.config(value=p))
+
+        try:
+            setup = updater.apply_update(info, progress=progress)
+        except Exception as exc:
+            self.set_status(f"Update fehlgeschlagen: {exc}")
+            return
+        exe = Path(sys.executable) if getattr(sys, "frozen", False) else None
+        self.set_status("Installer startet…")
+        updater.launch_installer(setup, restart_exe=exe)
+        if sys.platform.startswith("win"):
+            self.root.after(400, self.quit_callback)
 
     def connect(self) -> None:
         if self.connected:

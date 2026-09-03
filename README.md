@@ -31,6 +31,10 @@ Oder GitHub Actions: Datei `installer/github-actions-build-windows.yml` nach `.g
 
 Einstellungen liegen in `config.json`, Login in `credentials.json` (beide nicht im Git).
 
+## Auto-Update
+
+Die App prüft beim Start GitHub Releases. Gibt es eine neuere **TypeHack-Setup-*.exe**, kannst du sie installieren (SHA-256, stiller Inno-Setup, Neustart). Optionen: *Beim Start prüfen*, *Updates still installieren*.
+
 **Quit** schließt Browser + App. **Panic!** bricht nur das Python-Programm ab.
 
 ## Abhängigkeiten
