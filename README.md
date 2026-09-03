@@ -9,7 +9,15 @@ Hilfsprogramm für [typewriter.at](https://www.typewriter.at) (öffentliche Inst
 - Tippen geht über das Browser-Fenster (`send_keys`), nicht mehr über pynput ins falsche Fenster.
 - Start/Stop ist nicht mehr verdreht. Credentials liegen in `credentials.json` (steht in `.gitignore`).
 
-## Windows einrichten
+## Windows: Installer (kein Python nötig)
+
+1. Unter [Releases](https://github.com/Nikoheld/TypeHack/releases) **TypeHack-Setup-2.1.0.exe** laden.
+2. Installer starten (legt TypeHack nach `%LOCALAPPDATA%\TypeHack`, Desktop-Verknüpfung optional).
+3. **TypeHack** öffnen — Microsoft Edge ist auf Windows 10/11 schon da.
+
+Der Installer kommt aus GitHub Actions (`Build Windows installer`). Manuell: `build.bat` auf einem Windows-PC, danach `installer\TypeHack.iss` mit [Inno Setup](https://jrsoftware.org/isinfo.php) kompilieren.
+
+## Windows einrichten (Entwickler, mit Python)
 
 1. [Python 3.12+](https://www.python.org/downloads/) installieren, **Add python.exe to PATH** ankreuzen.
 2. `Installieren.bat` ausführen.

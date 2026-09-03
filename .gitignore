@@ -8,3 +8,6 @@ venv/
 msedgedriver.exe
 chromedriver.exe
 .DS_Store
+build/
+dist/
+*.spec.bak

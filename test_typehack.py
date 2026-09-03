@@ -46,6 +46,10 @@ class CredentialTests(unittest.TestCase):
         cfg = th.load_config(Path("/tmp/typehack-missing-config.json"))
         self.assertEqual(cfg["base_url"], th.DEFAULT_CONFIG["base_url"])
 
+    def test_app_dir_dev_is_source_folder(self):
+        self.assertEqual(th.app_dir(), Path(th.__file__).resolve().parent)
+        self.assertTrue(hasattr(th, "VERSION"))
+
 
 if __name__ == "__main__":
     unittest.main()

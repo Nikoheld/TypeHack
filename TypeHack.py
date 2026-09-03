@@ -22,9 +22,17 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 colorama_init(autoreset=True)
 
-BASE_DIR = Path(__file__).resolve().parent
+def app_dir() -> Path:
+    """Writable folder next to the exe (installer) or the source file (dev)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+BASE_DIR = app_dir()
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 CONFIG_FILE = BASE_DIR / "config.json"
+VERSION = "2.1.0"
 
 PRESET_URLS = {
     "Österreich (at4)": "https://at4.typewriter.at",
