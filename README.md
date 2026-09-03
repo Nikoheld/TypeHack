@@ -14,11 +14,12 @@ Hilfsprogramm für [typewriter.at](https://www.typewriter.at) (öffentliche Inst
 1. [Python 3.12+](https://www.python.org/downloads/) installieren, **Add python.exe to PATH** ankreuzen.
 2. `Installieren.bat` ausführen.
 3. `Start.bat` oder `py -3 TypeHack.py`.
-4. Beim ersten Mal `n` — E-Mail und Passwort. Danach `j`.
-5. Edge/Chrome öffnet typewriter.at. Captcha lösen, falls nötig. Level wählen.
-6. Im TypeHack-Fenster **Start Typing**.
+4. `Start.bat` öffnet das **TypeHack-Fenster** (kein Konsolen-Login mehr).
+5. E-Mail/Passwort, Server (AT/DE/CH/eigene URL), Browser, Tempo, Jitter, Tipp-Modus einstellen.
+6. **Verbinden** — Captcha im Browser lösen, falls nötig. Level wählen.
+7. **Start Typing**.
 
-Geschwindigkeit: links schnell, rechts Pause zwischen den Blöcken.
+Einstellungen liegen in `config.json`, Login in `credentials.json` (beide nicht im Git).
 
 **Quit** schließt Browser + App. **Panic!** bricht nur das Python-Programm ab.
 
@@ -33,4 +34,4 @@ Siehe `requirements.txt`:
 
 - Die Tipp-Seite hängt an CSS/XPath-Kandidaten. Ändert typewriter.at das Layout, Selectors in `TypeHack.py` (`PROMPT_SELECTORS`) anpassen.
 - Server-IPs sehen oft nur die ALTCHA-Seite; ein normaler Schul-PC mit Edge kommt in der Regel durch.
-- Plus-Versionen laufen auf der Schul-Subdomain (z. B. `schule.typewriter.at`). Dann `DEFAULT_BASE` in `TypeHack.py` ändern.
+- Plus-Versionen: im GUI **Benutzerdefiniert** und die Schul-URL eintragen.
