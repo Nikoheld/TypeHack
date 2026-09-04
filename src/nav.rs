@@ -1,5 +1,13 @@
 //! Page-kind helpers: captcha → reload only; achievement dialogs stay closed.
 
+/// Dashboard after login. Never auto-open generateLevel — the user picks the lesson.
+pub const OVERVIEW_PATH: &str = "/index.php?r=user/overview";
+
+pub fn is_dashboard_url(url: &str) -> bool {
+    let u = url.to_ascii_lowercase();
+    u.contains("user/overview")
+}
+
 pub fn is_captcha_view(url: &str, html: &str) -> bool {
     let blob = format!("{url}\n{html}").to_ascii_lowercase();
     if blob.contains("loginform") || blob.contains("login-form") || blob.contains("id=\"text_todo") {

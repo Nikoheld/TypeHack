@@ -7,12 +7,13 @@ use std::time::{Duration, Instant};
 use thirtyfour::prelude::*;
 
 use typehack::keys::{force_foreground_typewriter, send_glyph};
-use typehack::nav::{is_achievement_click_target, is_achievement_dialog, is_captcha_view, is_start_dialog};
+use typehack::nav::{
+    is_achievement_click_target, is_achievement_dialog, is_captcha_view, is_dashboard_url, is_start_dialog,
+    OVERVIEW_PATH,
+};
 use typehack::prompt::{first_remaining_glyph, pick_remaining_prompt, PROMPT_SELECTORS};
 
 const LOGIN_PATH: &str = "/index.php?r=site/login";
-const LEVEL_PATH: &str = "/index.php?r=typewriter/runLevel";
-const GENERATE_PATH: &str = "/index.php?r=typewriter/generateLevel";
 
 const FOCUS_JS: &str = r#"
 window.focus();
@@ -137,7 +138,7 @@ impl BrowserSession {
             tokio::time::sleep(Duration::from_millis(120)).await;
         }
         close_achievement_dialogs(&self.driver).await;
-        let _ = open_write_mode(&self.driver, base).await;
+        stay_on_dashboard(&self.driver, base).await;
         close_achievement_dialogs(&self.driver).await;
         Ok(())
     }
@@ -147,8 +148,8 @@ impl BrowserSession {
         remaining_prompt(&self.driver, Duration::from_secs(3)).await
     }
 
-    pub async fn arm_and_focus(&self, base: &str) -> Result<(), String> {
-        let _ = open_write_mode(&self.driver, base.trim_end_matches('/')).await;
+    pub async fn arm_and_focus(&self, _base: &str) -> Result<(), String> {
+        // Stay on the page the user opened. Do not jump to generateLevel.
         close_achievement_dialogs(&self.driver).await;
         click_lesson_start(&self.driver).await;
         focus_typer(&self.driver).await;
@@ -302,21 +303,20 @@ async fn close_achievement_dialogs(driver: &WebDriver) {
     let _ = driver.execute(CLOSE_ACHIEVEMENT_JS, vec![]).await;
 }
 
-async fn open_write_mode(driver: &WebDriver, base: &str) -> bool {
-    if remaining_now(driver).await.is_some() {
-        return true;
+async fn stay_on_dashboard(driver: &WebDriver, base: &str) {
+    let url = driver.current_url().await.map(|u| u.to_string()).unwrap_or_default();
+    if is_dashboard_url(&url) {
+        return;
     }
-    close_achievement_dialogs(driver).await;
-    // Go straight to the lesson URL — do not click cockpit/badges (that opens Abzeichen).
-    for path in [GENERATE_PATH, LEVEL_PATH] {
-        let _ = driver.goto(&format!("{base}{path}")).await;
+    if url.contains("generateLevel") || url.contains("runLevel") {
+        let _ = driver.goto(&format!("{base}{OVERVIEW_PATH}")).await;
         tokio::time::sleep(Duration::from_millis(400)).await;
-        close_achievement_dialogs(driver).await;
-        if remaining_now(driver).await.is_some() {
-            return true;
-        }
+        return;
     }
-    remaining_now(driver).await.is_some()
+    if !url.contains("site/login") {
+        let _ = driver.goto(&format!("{base}{OVERVIEW_PATH}")).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
 }
 
 async fn click_lesson_start(driver: &WebDriver) {

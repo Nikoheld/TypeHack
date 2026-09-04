@@ -28,7 +28,7 @@ impl Default for Live {
     fn default() -> Self {
         Self {
             status: "Bereit.".into(),
-            remaining: "Verbinden → Level wählen → Start Typing.".into(),
+            remaining: "Verbinden → im Dashboard Lektion wählen → Start Typing.".into(),
             connected: false,
             typing: false,
             badge: "getrennt".into(),
@@ -276,7 +276,7 @@ impl App {
                         if let Ok(mut g) = live.lock() {
                             g.connected = true;
                             g.badge = "verbunden".into();
-                            g.status = "Verbunden. Level wählen, dann Start Typing.".into();
+                            g.status = "Verbunden. Im Dashboard eine Lektion wählen, dann Start Typing.".into();
                         }
                         // Keep session by leaking into a parked thread via channel is heavy;
                         // store in OnceLock-like static for Start Typing.

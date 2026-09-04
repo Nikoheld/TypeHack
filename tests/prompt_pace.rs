@@ -94,6 +94,18 @@ fn captcha_reload_not_login_or_lesson() {
 }
 
 #[test]
+fn post_login_stays_on_dashboard_not_generate_level() {
+    assert_eq!(OVERVIEW_PATH, "/index.php?r=user/overview");
+    assert!(is_dashboard_url(
+        "https://at4.typewriter.at/index.php?r=user/overview"
+    ));
+    assert!(!is_dashboard_url(
+        "https://at4.typewriter.at/index.php?r=typewriter/generateLevel"
+    ));
+    assert!(!OVERVIEW_PATH.contains("generateLevel"));
+}
+
+#[test]
 fn achievement_card_is_not_the_start_dialog() {
     assert!(is_achievement_dialog("Abzeichen Close"));
     assert!(!is_start_dialog("Abzeichen Close"));
