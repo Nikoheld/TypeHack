@@ -1,4 +1,6 @@
-//! Anschläge / 10 Minuten → delay between keystrokes (same clamp as TypeHack 2.x).
+//! Anschläge / 10 Minuten → wall-clock keystroke schedule (2000 → exactly 0.3s).
+
+use std::time::Duration;
 
 pub const STROKES_MIN: i32 = 200;
 pub const STROKES_MAX: i32 = 8000;
@@ -13,27 +15,30 @@ pub fn clamp_strokes(n: impl Into<f64>) -> i32 {
     (value as i32).clamp(STROKES_MIN, STROKES_MAX)
 }
 
-/// Seconds between keystrokes from Anschläge / 10 minutes. 2000 → 0.3s.
+/// Seconds between keystrokes from Anschläge / 10 minutes. 2000 → 0.3s exactly.
 pub fn interval_seconds(strokes_per_10min: impl Into<f64>) -> f64 {
     let n = clamp_strokes(strokes_per_10min);
-    (WINDOW_SECONDS / f64::from(n)).max(0.02)
+    WINDOW_SECONDS / f64::from(n)
 }
 
-pub fn interval_seconds_cfg(strokes_per_10min: i32, jitter_pct: f64) -> f64 {
-    let base = interval_seconds(strokes_per_10min);
-    let jitter = jitter_pct.clamp(0.0, 100.0) / 100.0;
-    if jitter <= 0.0 {
-        return base;
+/// Zero when MAX Speed is on so keys fire as fast as the lesson accepts them.
+pub fn interval_duration(strokes_per_10min: i32, max_speed: bool) -> Duration {
+    if max_speed {
+        Duration::ZERO
+    } else {
+        Duration::from_secs_f64(interval_seconds(strokes_per_10min))
     }
-    let factor = 1.0 + (hash_jitter() * 2.0 - 1.0) * jitter;
-    (base * factor).max(0.02)
 }
 
-fn hash_jitter() -> f64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(1);
-    (t as f64) / 1_000_000_000.0
+/// When the Nth key (0-based) is due relative to session start.
+/// Key 0 at t=0, key 1 at 1×interval, … so 2000 keys land in 599.7s ≈ 2000/10min.
+pub fn due_after(sent: u64, interval: Duration) -> Duration {
+    interval.saturating_mul(sent as u32)
+}
+
+pub fn expected_strokes_per_10min(interval: Duration) -> f64 {
+    if interval.is_zero() {
+        return f64::INFINITY;
+    }
+    WINDOW_SECONDS / interval.as_secs_f64()
 }

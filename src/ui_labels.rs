@@ -8,7 +8,8 @@ pub const CONNECT: &str = "Verbinden";
 pub const START: &str = "Start Typing";
 pub const STOP: &str = "Stop";
 pub const REMAINING: &str = "Restzeile";
+pub const MAX_SPEED: &str = "MAX Speed";
 
 pub fn all_controls() -> &'static [&'static str] {
-    &[EMAIL, PASSWORD, SERVER, RATE, CONNECT, START, STOP, REMAINING]
+    &[EMAIL, PASSWORD, SERVER, RATE, CONNECT, START, STOP, REMAINING, MAX_SPEED]
 }

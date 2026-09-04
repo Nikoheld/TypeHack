@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, CornerRadius, FontId, Frame, Margin, RichText, Stroke, Ui, Vec2};
 use typehack::config::{self, Config, PRESET_URLS};
-use typehack::pace::{clamp_strokes, interval_seconds, STROKES_MAX, STROKES_MIN};
+use typehack::pace::{clamp_strokes, due_after, interval_duration, interval_seconds, STROKES_MAX, STROKES_MIN};
 use typehack::ui_labels;
 use typehack::{VERSION, WINDOW_TITLE};
 
@@ -28,7 +28,7 @@ impl Default for Live {
     fn default() -> Self {
         Self {
             status: "Bereit.".into(),
-            remaining: "Verbinden → Captcha lösen → Level wählen → Start Typing.".into(),
+            remaining: "Verbinden → Level wählen → Start Typing.".into(),
             connected: false,
             typing: false,
             badge: "getrennt".into(),
@@ -42,6 +42,7 @@ struct App {
     preset: String,
     custom_url: String,
     strokes: i32,
+    max_speed: bool,
     always_on_top: bool,
     live: Arc<Mutex<Live>>,
     stop: Arc<AtomicBool>,
@@ -68,6 +69,7 @@ impl App {
             preset: cfg.url_preset,
             custom_url,
             strokes: clamp_strokes(cfg.strokes_per_10min),
+            max_speed: cfg.max_speed,
             always_on_top: cfg.always_on_top,
             live: Arc::new(Mutex::new(Live::default())),
             stop: Arc::new(AtomicBool::new(false)),
@@ -100,6 +102,7 @@ impl App {
             always_on_top: self.always_on_top,
             strokes_per_10min: clamp_strokes(self.strokes),
             jitter_pct: 0.0,
+            max_speed: self.max_speed,
         };
         let _ = config::save_config(&cfg, &config::config_path());
         if !self.email.trim().is_empty() && !self.password.is_empty() {
@@ -158,26 +161,29 @@ impl eframe::App for App {
                                 ui.add_space(12.0);
                                 ui.label(RichText::new(ui_labels::RATE).color(COL_MUTED).size(12.0));
                                 ui.horizontal(|ui| {
-                                    ui.add(
+                                    ui.add_enabled(
+                                        !self.max_speed,
                                         egui::DragValue::new(&mut self.strokes)
                                             .range(STROKES_MIN..=STROKES_MAX)
                                             .speed(10),
                                     );
-                                    ui.add(
+                                    ui.add_enabled(
+                                        !self.max_speed,
                                         egui::Slider::new(&mut self.strokes, STROKES_MIN..=STROKES_MAX)
                                             .show_value(false),
                                     );
                                 });
                                 let n = clamp_strokes(self.strokes);
-                                let ms = (interval_seconds(n) * 1000.0).round() as i32;
-                                ui.label(
-                                    RichText::new(format!(
-                                        "≈ {:.2} Anschläge/s  ·  {ms} ms Abstand",
-                                        n as f64 / 600.0
-                                    ))
-                                    .color(COL_MUTED)
-                                    .size(11.0),
-                                );
+                                if ui.checkbox(&mut self.max_speed, ui_labels::MAX_SPEED).changed() {
+                                    self.persist();
+                                }
+                                let pace_txt = if self.max_speed {
+                                    "MAX Speed — so schnell wie die Lektion mitkommt.".to_string()
+                                } else {
+                                    let ms = (interval_seconds(n) * 1000.0).round() as i32;
+                                    format!("exakt {n} / 10 min  ·  {:.2} Anschläge/s  ·  {ms} ms", n as f64 / 600.0)
+                                };
+                                ui.label(RichText::new(pace_txt).color(COL_MUTED).size(11.0));
                             });
                             ui.add_space(10.0);
                             Frame::new()
@@ -247,7 +253,7 @@ impl App {
         self.persist();
         self.connecting = true;
         self.set_live(|l| {
-            l.status = "Starte Browser… Captcha im Fenster lösen, Login kommt danach.".into();
+            l.status = "Starte Browser… Captcha? Seite wird neu geladen.".into();
             l.badge = "verbindet".into();
         });
         let email = self.email.trim().to_string();
@@ -301,6 +307,7 @@ impl App {
         let stop = self.stop.clone();
         let base = self.base_url();
         let strokes = clamp_strokes(self.strokes);
+        let max_speed = self.max_speed;
         thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("tokio");
             rt.block_on(async move {
@@ -313,13 +320,30 @@ impl App {
                     return;
                 };
                 let _ = session.arm_and_focus(&base).await;
+                let interval = interval_duration(strokes, max_speed);
+                let t0 = std::time::Instant::now();
+                let mut sent: u64 = 0;
                 while !stop.load(Ordering::SeqCst) {
-                    match session.type_one(strokes).await {
+                    let due = t0 + due_after(sent, interval);
+                    let now = std::time::Instant::now();
+                    if due > now {
+                        tokio::time::sleep(due - now).await;
+                    }
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    match session.type_one().await {
                         Ok((ch, remaining, n)) => {
+                            sent += 1;
                             if let Ok(mut g) = live.lock() {
                                 g.remaining = remaining;
                                 let show = if ch == ' ' { "␣".into() } else { ch.to_string() };
-                                g.status = format!("Tippt »{show}« · noch {n} Zeichen");
+                                let pace = if max_speed {
+                                    "MAX".to_string()
+                                } else {
+                                    format!("{strokes}/10min")
+                                };
+                                g.status = format!("Tippt »{show}« · {pace} · noch {n}");
                                 g.typing = true;
                                 g.badge = "tippt".into();
                             }
@@ -332,7 +356,7 @@ impl App {
                                 g.status = format!("Kein Tipptext — {e}");
                             }
                             let _ = session.arm_and_focus(&base).await;
-                            tokio::time::sleep(Duration::from_millis(600)).await;
+                            tokio::time::sleep(Duration::from_millis(250)).await;
                         }
                     }
                 }

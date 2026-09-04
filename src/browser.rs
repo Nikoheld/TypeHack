@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use thirtyfour::prelude::*;
 
 use typehack::keys::{force_foreground_typewriter, send_glyph};
-use typehack::pace::interval_seconds;
+use typehack::nav::{is_achievement_click_target, is_achievement_dialog, is_captcha_view, is_start_dialog};
 use typehack::prompt::{first_remaining_glyph, pick_remaining_prompt, PROMPT_SELECTORS};
 
 const LOGIN_PATH: &str = "/index.php?r=site/login";
@@ -104,8 +104,10 @@ impl BrowserSession {
             .map_err(|e| format!("Login-Seite: {e}"))?;
         let deadline = Instant::now() + Duration::from_secs(180);
         let mut submitted = false;
+        let mut last_reload = Instant::now();
         while Instant::now() < deadline {
             dismiss_overlays(&self.driver).await;
+            close_achievement_dialogs(&self.driver).await;
             if logged_in(&self.driver).await {
                 break;
             }
@@ -127,13 +129,16 @@ impl BrowserSession {
                         let _ = pw.send_keys(thirtyfour::Key::Enter).await;
                     }
                     submitted = true;
-                } else {
-                    nudge_captcha(&self.driver).await;
+                } else if last_reload.elapsed() >= Duration::from_secs(2) {
+                    reload_if_captcha(&self.driver).await;
+                    last_reload = Instant::now();
                 }
             }
             tokio::time::sleep(Duration::from_millis(120)).await;
         }
+        close_achievement_dialogs(&self.driver).await;
         let _ = open_write_mode(&self.driver, base).await;
+        close_achievement_dialogs(&self.driver).await;
         Ok(())
     }
 
@@ -144,50 +149,23 @@ impl BrowserSession {
 
     pub async fn arm_and_focus(&self, base: &str) -> Result<(), String> {
         let _ = open_write_mode(&self.driver, base.trim_end_matches('/')).await;
-        click_start(&self.driver).await;
+        close_achievement_dialogs(&self.driver).await;
+        click_lesson_start(&self.driver).await;
         focus_typer(&self.driver).await;
         force_foreground_typewriter();
-        let _ = send_glyph('\n');
         Ok(())
     }
 
-    pub async fn type_one(&self, strokes_per_10min: i32) -> Result<(char, String, usize), String> {
-        force_foreground_typewriter();
+    /// One remaining glyph. Does not sleep for pace — the caller owns the wall-clock schedule.
+    pub async fn type_one(&self) -> Result<(char, String, usize), String> {
+        close_achievement_dialogs(&self.driver).await;
         focus_typer(&self.driver).await;
-        let before = remaining_prompt(&self.driver, Duration::from_secs(3)).await?;
+        let before = remaining_now(&self.driver)
+            .await
+            .ok_or_else(|| "Tipptext ist leer".to_string())?;
         let ch = first_remaining_glyph(&before).map_err(|e| e.0)?;
-        send_glyph(ch).map_err(|e| e)?;
-        tokio::time::sleep(Duration::from_millis(120)).await;
-        let after = remaining_prompt(&self.driver, Duration::from_millis(800))
-            .await
-            .unwrap_or_else(|_| before.clone());
-        if after == before {
-            focus_typer(&self.driver).await;
-            let _ = self
-                .driver
-                .execute(
-                    &format!(
-                        r#"
-                        var ch = {:?};
-                        if (typeof setFocusMobileText === 'function') setFocusMobileText();
-                        var el = document.activeElement;
-                        if (el && 'value' in el) {{
-                          el.value = (el.value || '') + ch;
-                          el.dispatchEvent(new InputEvent('input', {{bubbles:true, data: ch, inputType:'insertText'}}));
-                        }}
-                        "#,
-                        ch.to_string()
-                    ),
-                    vec![],
-                )
-                .await;
-            tokio::time::sleep(Duration::from_millis(80)).await;
-        }
-        let now = remaining_prompt(&self.driver, Duration::from_millis(600))
-            .await
-            .unwrap_or(after);
-        let wait = interval_seconds(strokes_per_10min);
-        tokio::time::sleep(Duration::from_secs_f64(wait.max(0.02))).await;
+        send_glyph(ch)?;
+        let now = remaining_now(&self.driver).await.unwrap_or(before);
         Ok((ch, now.clone(), now.chars().count()))
     }
 
@@ -199,18 +177,20 @@ impl BrowserSession {
     }
 }
 
+async fn remaining_now(driver: &WebDriver) -> Option<String> {
+    let htmls = collect_html(driver).await.ok()?;
+    pick_remaining_prompt(&htmls).ok()
+}
+
 async fn remaining_prompt(driver: &WebDriver, timeout: Duration) -> Result<String, String> {
     let end = Instant::now() + timeout;
     let mut last = "Tipptext ist leer".to_string();
     while Instant::now() < end {
-        match collect_html(driver).await {
-            Ok(htmls) => match pick_remaining_prompt(&htmls) {
-                Ok(text) => return Ok(text),
-                Err(e) => last = e.0,
-            },
-            Err(e) => last = e,
+        match remaining_now(driver).await {
+            Some(text) => return Ok(text),
+            None => last = "Tipptext ist leer".into(),
         }
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
     }
     Err(last)
 }
@@ -295,83 +275,72 @@ async fn dismiss_overlays(driver: &WebDriver) {
     }
 }
 
-async fn nudge_captcha(driver: &WebDriver) {
-    for s in ["#chal-form button", "form#chal-form button", ".altcha", "#altcha"] {
-        if let Some(el) = first_css(driver, s).await {
-            let _ = driver.execute("arguments[0].click();", vec![el.to_json().unwrap_or(serde_json::Value::Null)]).await;
-            return;
-        }
+async fn reload_if_captcha(driver: &WebDriver) {
+    let url = driver.current_url().await.map(|u| u.to_string()).unwrap_or_default();
+    let html = driver.source().await.unwrap_or_default();
+    if is_captcha_view(&url, &html) {
+        let _ = driver.refresh().await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
     }
+}
+
+const CLOSE_ACHIEVEMENT_JS: &str = r#"
+(function(){
+  var nodes = document.querySelectorAll('.ui-dialog');
+  for (var i=0;i<nodes.length;i++){
+    var d = nodes[i];
+    var t = (d.innerText||'').toLowerCase();
+    if (t.indexOf('abzeichen')>=0 || t.indexOf('achievement')>=0) {
+      try { if (window.jQuery) jQuery(d).dialog('close'); } catch(e) {}
+      d.style.display = 'none';
+    }
+  }
+})();
+"#;
+
+async fn close_achievement_dialogs(driver: &WebDriver) {
+    let _ = driver.execute(CLOSE_ACHIEVEMENT_JS, vec![]).await;
 }
 
 async fn open_write_mode(driver: &WebDriver, base: &str) -> bool {
-    if remaining_prompt(driver, Duration::from_millis(400)).await.is_ok() {
+    if remaining_now(driver).await.is_some() {
         return true;
     }
-    let write_sels = [
-        "a.cockpitStartButton, button.cockpitStartButton, .cockpitStartButton",
-        "a[href*='generateLevel'], a[href*='runLevel']",
-    ];
-    for s in write_sels {
-        if let Some(el) = first_css(driver, s).await {
-            let href = el.attr("href").await.ok().flatten().unwrap_or_default().to_lowercase();
-            let text = el.text().await.unwrap_or_default().to_lowercase();
-            if href.contains("logout") || text.contains("abmelden") {
-                continue;
-            }
-            let _ = el.click().await;
-            tokio::time::sleep(Duration::from_millis(600)).await;
-            if remaining_prompt(driver, Duration::from_millis(800)).await.is_ok() {
-                return true;
-            }
-        }
-    }
-    if let Ok(els) = driver.find_all(By::XPath("//a[contains(., 'Schreiben') and not(contains(., 'Abmelden'))]")).await {
-        for el in els {
-            if el.is_displayed().await.unwrap_or(false) {
-                let _ = el.click().await;
-                tokio::time::sleep(Duration::from_millis(600)).await;
-                break;
-            }
-        }
-    }
-    if remaining_prompt(driver, Duration::from_millis(800)).await.is_ok() {
-        return true;
-    }
+    close_achievement_dialogs(driver).await;
+    // Go straight to the lesson URL — do not click cockpit/badges (that opens Abzeichen).
     for path in [GENERATE_PATH, LEVEL_PATH] {
         let _ = driver.goto(&format!("{base}{path}")).await;
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        if remaining_prompt(driver, Duration::from_millis(800)).await.is_ok() {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        close_achievement_dialogs(driver).await;
+        if remaining_now(driver).await.is_some() {
             return true;
         }
     }
-    false
+    remaining_now(driver).await.is_some()
 }
 
-async fn click_start(driver: &WebDriver) {
-    let sels = [
-        ".ui-dialog-buttonset button",
-        "div.ui-dialog button",
-        "a.cockpitStartButton, button.cockpitStartButton",
-    ];
-    for s in sels {
-        if let Some(el) = first_css(driver, s).await {
-            let text = el.text().await.unwrap_or_default().to_lowercase();
-            if text.contains("abmelden") {
+async fn click_lesson_start(driver: &WebDriver) {
+    close_achievement_dialogs(driver).await;
+    if let Ok(dialogs) = driver.find_all(By::Css(".ui-dialog")).await {
+        for dlg in dialogs {
+            let text = dlg.text().await.unwrap_or_default();
+            if is_achievement_dialog(&text) {
                 continue;
             }
-            let _ = el.click().await;
-            return;
-        }
-    }
-    if let Ok(els) = driver
-        .find_all(By::XPath("//button[contains(., 'Start') or contains(., 'OK') or contains(., 'Weiter') or contains(., 'Los')]"))
-        .await
-    {
-        for el in els {
-            if el.is_displayed().await.unwrap_or(false) {
-                let _ = el.click().await;
-                return;
+            if !is_start_dialog(&text) {
+                continue;
+            }
+            if let Ok(btns) = dlg.find_all(By::Css("button")).await {
+                for btn in btns {
+                    let bt = btn.text().await.unwrap_or_default();
+                    if is_achievement_click_target(&bt) {
+                        continue;
+                    }
+                    if btn.is_displayed().await.unwrap_or(false) {
+                        let _ = btn.click().await;
+                        return;
+                    }
+                }
             }
         }
     }

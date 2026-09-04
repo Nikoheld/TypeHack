@@ -12,6 +12,8 @@ pub struct Config {
     pub always_on_top: bool,
     pub strokes_per_10min: i32,
     pub jitter_pct: f64,
+    #[serde(default)]
+    pub max_speed: bool,
 }
 
 impl Default for Config {
@@ -24,6 +26,7 @@ impl Default for Config {
             always_on_top: true,
             strokes_per_10min: STROKES_DEFAULT,
             jitter_pct: 0.0,
+            max_speed: false,
         }
     }
 }
@@ -80,6 +83,9 @@ pub fn merge_config(raw: Option<&serde_json::Value>) -> Config {
     }
     if let Some(v) = map.get("jitter_pct").and_then(|v| v.as_f64()) {
         cfg.jitter_pct = v;
+    }
+    if let Some(v) = map.get("max_speed").and_then(|v| v.as_bool()) {
+        cfg.max_speed = v;
     }
     cfg
 }

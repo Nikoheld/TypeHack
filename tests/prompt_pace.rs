@@ -59,8 +59,48 @@ fn clamp_and_interval_match_2x() {
     assert_eq!(clamp_strokes(2000), 2000);
     assert_eq!(clamp_strokes(50), 200);
     assert_eq!(clamp_strokes(99999), 8000);
-    assert!((interval_seconds(2000) - 0.3).abs() < 1e-9);
-    assert!((interval_seconds(600) - 1.0).abs() < 1e-9);
+    assert!((interval_seconds(2000) - 0.3).abs() < 1e-12);
+    assert!((interval_seconds(600) - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn wall_clock_schedule_hits_2000_per_10_min() {
+    use std::time::Duration;
+    use typehack::pace::{due_after, expected_strokes_per_10min, interval_duration};
+    let iv = interval_duration(2000, false);
+    assert!((iv.as_secs_f64() - 0.3).abs() < 1e-12);
+    assert_eq!(due_after(0, iv), Duration::ZERO);
+    assert!((due_after(1, iv).as_secs_f64() - 0.3).abs() < 1e-12);
+    assert!((due_after(10, iv).as_secs_f64() - 3.0).abs() < 1e-9);
+    assert!((expected_strokes_per_10min(iv) - 2000.0).abs() < 1e-6);
+    assert!(interval_duration(2000, true).is_zero());
+    assert!(expected_strokes_per_10min(Duration::ZERO).is_infinite());
+}
+
+#[test]
+fn captcha_reload_not_login_or_lesson() {
+    assert!(is_captcha_view(
+        "https://at4.typewriter.at/_chal/x",
+        "<form id='chal-form'><h1>Sicherheitsprüfung</h1></form>"
+    ));
+    assert!(!is_captcha_view(
+        "https://at4.typewriter.at/index.php?r=site/login",
+        r#"<form id="login-form"><input id="LoginForm_username"></form>"#
+    ));
+    assert!(!is_captcha_view(
+        "https://at4.typewriter.at/index.php?r=typewriter/runLevel",
+        r#"<div id="text_todo_1"><span>a</span></div>"#
+    ));
+}
+
+#[test]
+fn achievement_card_is_not_the_start_dialog() {
+    assert!(is_achievement_dialog("Abzeichen Close"));
+    assert!(!is_start_dialog("Abzeichen Close"));
+    assert!(is_start_dialog(
+        "Achtung! Fertig! ...\nDrücke eine beliebige Taste zum Starten\nStart"
+    ));
+    assert!(!is_start_dialog("Pause\nDer Schreibmodus wurde pausiert!"));
 }
 
 #[test]
@@ -196,7 +236,16 @@ fn qwertz_y_and_z_stay_distinct() {
 #[test]
 fn ui_exposes_product_controls() {
     let all = typehack::ui_labels::all_controls();
-    for need in ["E-Mail", "Passwort", "Server", "Anschläge / 10 Minuten", "Verbinden", "Start Typing", "Stop"] {
+    for need in [
+        "E-Mail",
+        "Passwort",
+        "Server",
+        "Anschläge / 10 Minuten",
+        "Verbinden",
+        "Start Typing",
+        "Stop",
+        "MAX Speed",
+    ] {
         assert!(all.contains(&need), "missing {need}");
     }
 }
