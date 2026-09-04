@@ -1,0 +1,53 @@
+name: Build Windows installer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Test
+        run: cargo test
+
+      - name: Release build
+        run: cargo build --release --bin TypeHack
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\TypeHack.iss'
+
+      - name: Stage portable exe
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\release\TypeHack.exe dist\TypeHack-${{ github.ref_name }}.exe -ErrorAction SilentlyContinue
+          Copy-Item target\release\TypeHack.exe dist\TypeHack.exe
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TypeHack-Windows
+          path: |
+            dist/TypeHack-Setup-*.exe
+            dist/TypeHack.exe
+
+      - name: Attach to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/TypeHack-Setup-*.exe
+            dist/TypeHack.exe

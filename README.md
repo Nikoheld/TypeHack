@@ -1,33 +1,36 @@
-# TypeHack 3.0.2
+# TypeHack 3.1.0
 
 Native **Rust** helper for [typewriter.at](https://www.typewriter.at) (public instance `at4.typewriter.at`).
 
-The 2.x Python/Tk app is no longer the shipped runtime. **3.0** is a full rebuild: faster process, new desktop UI, OS keystrokes into the hidden typewriter input.
+## Clean Windows install
 
-## Run (Windows)
+No Python, no admin, no extra runtime:
 
-1. [Rust](https://rustup.rs) (MSVC toolchain) and Microsoft Edge.
-2. `cargo test`
-3. `cargo run --release --bin TypeHack` or `Start.bat`
-4. E-Mail / Passwort, Server (AT/DE/CH), Anschläge / 10 Minuten.
-5. **Verbinden** — Captcha im Browser lösen (Seite wird nur neu geladen, nicht angeklickt).
-6. Im **Dashboard** selbst eine Lektion wählen.
-7. **Start Typing** — Edge-Fenster vorn lassen.
+1. Download `TypeHack-Setup-3.1.0.exe` or `TypeHack-3.1.0.exe` from [Releases](https://github.com/Nikoheld/TypeHack/releases).
+2. Run it. The app copies itself to `%LOCALAPPDATA%\TypeHack`, creates Desktop + Start-menu shortcuts, and downloads a matching **msedgedriver** for the installed Microsoft Edge.
+3. **Verbinden** — Captcha im Browser lösen (Seite wird nur neu geladen).
+4. Im **Dashboard** eine Lektion wählen, dann **Start Typing**.
 
-Settings: `config.json`, login: `credentials.json` (gitignored).
+Windows 10/11 already includes Edge. If Edge is missing, install it from https://www.microsoft.com/edge.
 
-## What 3.0.2 does
+Updates download in the background from GitHub and apply when you are not typing (checkbox **Automatisch aktualisieren**).
+
+Settings: `%LOCALAPPDATA%\TypeHack\config.json`, login: `credentials.json` (gitignored).
+
+## What 3.1 does
 
 - Remaining prompt from `#text_todo_1` (empty span = space, skip done spans, umlauts, `*`).
 - Space = virtual key **32**. y/z/ö are characters, not KeyY/KeyZ.
 - Pace = Anschläge / 10 Minuten (200–8000, **2000 → 0.3 s**). Changing the number **turns MAX Speed off**.
-- **MAX Speed** (checkbox only) dumps the whole remaining line with OS keys, targeting **≥ 100000 Anschläge / 10 min**. The Anschläge field does not apply while MAX is on.
+- **MAX Speed** dumps the whole remaining line with OS keys (≥ 100000 Anschläge / 10 min).
 - After login stays on `user/overview`. Does **not** open `generateLevel`.
 - Captcha: reload only. Achievement cards: closed, never clicked.
+- Self-install + Edge driver + silent GitHub auto-update.
 
-## Build
+## Build from source
 
 ```
+cargo test
 cargo build --release --bin TypeHack
 ```
 

@@ -9,6 +9,7 @@ debug_typing.py
 debug_typing.log
 msedgedriver.exe
 chromedriver.exe
+driver/
 .DS_Store
 build/
 dist/

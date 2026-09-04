@@ -14,6 +14,12 @@ pub struct Config {
     pub jitter_pct: f64,
     #[serde(default)]
     pub max_speed: bool,
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -27,6 +33,7 @@ impl Default for Config {
             strokes_per_10min: STROKES_DEFAULT,
             jitter_pct: 0.0,
             max_speed: false,
+            auto_update: true,
         }
     }
 }
@@ -43,10 +50,7 @@ pub fn preset_url(name: &str) -> Option<&'static str> {
 }
 
 pub fn app_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    crate::install::install_dir()
 }
 
 pub fn config_path() -> PathBuf {
@@ -86,6 +90,15 @@ pub fn merge_config(raw: Option<&serde_json::Value>) -> Config {
     }
     if let Some(v) = map.get("max_speed").and_then(|v| v.as_bool()) {
         cfg.max_speed = v;
+    }
+    cfg.auto_update = true;
+    if let Some(v) = map.get("auto_update").and_then(|v| v.as_bool()) {
+        cfg.auto_update = v;
+    } else if let Some(v) = map.get("auto_update_check").and_then(|v| v.as_bool()) {
+        cfg.auto_update = v;
+        if let Some(install) = map.get("auto_install_updates").and_then(|v| v.as_bool()) {
+            cfg.auto_update = v && install;
+        }
     }
     cfg
 }

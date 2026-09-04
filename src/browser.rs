@@ -1,6 +1,5 @@
 //! Edge/Chrome session: login, Schreiben, Start-Dialog, remaining prompt, OS typing.
 
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -63,9 +62,7 @@ pub struct BrowserSession {
 impl BrowserSession {
     pub async fn launch(browser: &str) -> Result<Self, String> {
         let port = 9518u16;
-        let driver_path = find_msedgedriver().ok_or_else(|| {
-            "msedgedriver.exe nicht gefunden. Edge installieren und TypeHack neu starten.".to_string()
-        })?;
+        let driver_path = typehack::driver::ensure_msedgedriver()?;
         let mut cmd = Command::new(&driver_path);
         cmd.arg(format!("--port={port}"))
             .stdin(Stdio::null())
@@ -85,8 +82,8 @@ impl BrowserSession {
         let _ = caps.add_arg("--remote-allow-origins=*");
         let _ = caps.add_arg("--no-first-run");
         let _ = caps.add_arg("--disable-popup-blocking");
-        if let Some(bin) = edge_binary() {
-            let _ = caps.set_binary(&bin);
+        if let Some(bin) = typehack::driver::edge_binary() {
+            let _ = caps.set_binary(&bin.to_string_lossy());
         }
         let url = format!("http://127.0.0.1:{port}");
         let driver = WebDriver::new(&url, caps)
@@ -381,41 +378,4 @@ async fn click_lesson_start(driver: &WebDriver) {
     }
 }
 
-fn edge_binary() -> Option<String> {
-    for p in [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-    ] {
-        if PathBuf::from(p).is_file() {
-            return Some(p.into());
-        }
-    }
-    None
-}
 
-fn find_msedgedriver() -> Option<PathBuf> {
-    if let Ok(home) = std::env::var("USERPROFILE") {
-        let root = PathBuf::from(home).join(r".cache\selenium\msedgedriver\win64");
-        if let Ok(iter) = std::fs::read_dir(&root) {
-            let mut best: Option<PathBuf> = None;
-            for ent in iter.flatten() {
-                let p = ent.path().join("msedgedriver.exe");
-                if p.is_file() {
-                    best = Some(p);
-                }
-            }
-            if best.is_some() {
-                return best;
-            }
-        }
-    }
-    for p in [
-        PathBuf::from("msedgedriver.exe"),
-        PathBuf::from(r".\msedgedriver.exe"),
-    ] {
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-    None
-}

@@ -1,5 +1,5 @@
 #define MyAppName "TypeHack"
-#define MyAppVersion "3.0.2"
+#define MyAppVersion "3.1.0"
 #define MyAppPublisher "Nikoheld"
 #define MyAppURL "https://github.com/Nikoheld/TypeHack"
 #define MyAppExeName "TypeHack.exe"
@@ -36,8 +36,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[Dirs]
+Name: "{app}\driver"
+
 [Files]
 Source: "..\target\release\TypeHack.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\target\release\msedgedriver.exe"; DestDir: "{app}\driver"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\driver\msedgedriver.exe"; DestDir: "{app}\driver"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

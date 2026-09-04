@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -53,6 +54,8 @@ struct App {
     live_strokes: Arc<AtomicI32>,
     loop_on: Arc<AtomicBool>,
     connecting: bool,
+    auto_update: bool,
+    pending_update: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl App {
@@ -69,7 +72,7 @@ impl App {
         } else {
             String::new()
         };
-        Self {
+        let app = Self {
             email: email.unwrap_or_default(),
             password: password.unwrap_or_default(),
             preset: cfg.url_preset,
@@ -83,7 +86,47 @@ impl App {
             live_strokes: Arc::new(AtomicI32::new(clamp_strokes(cfg.strokes_per_10min))),
             loop_on: Arc::new(AtomicBool::new(false)),
             connecting: false,
-        }
+            auto_update: cfg.auto_update,
+            pending_update: Arc::new(Mutex::new(None)),
+        };
+        let live_bg = app.live.clone();
+        let pending_bg = app.pending_update.clone();
+        let auto = cfg.auto_update;
+        thread::spawn(move || {
+            match typehack::driver::ensure_msedgedriver() {
+                Ok(_) => {
+                    if let Ok(mut g) = live_bg.lock() {
+                        if g.status == "Bereit." {
+                            g.status = "Bereit. Edge-Treiber ist da.".into();
+                        }
+                    }
+                }
+                Err(e) => {
+                    if let Ok(mut g) = live_bg.lock() {
+                        g.status = e;
+                    }
+                }
+            }
+            if !auto {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1800));
+            match typehack::update::background_update_once() {
+                Ok(Some((info, staged))) => {
+                    if let Ok(mut g) = live_bg.lock() {
+                        if !g.typing {
+                            g.status = format!("Update {} geladen — wird im Hintergrund installiert.", info.version);
+                        }
+                    }
+                    if let Ok(mut p) = pending_bg.lock() {
+                        *p = Some(staged);
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => {}
+            }
+        });
+        app
     }
 
     fn base_url(&self) -> String {
@@ -112,6 +155,7 @@ impl App {
             strokes_per_10min: clamp_strokes(self.strokes),
             jitter_pct: 0.0,
             max_speed: self.max_speed,
+            auto_update: self.auto_update,
         };
         let _ = config::save_config(&cfg, &config::config_path());
         if !self.email.trim().is_empty() && !self.password.is_empty() {
@@ -133,6 +177,16 @@ impl eframe::App for App {
         self.live_strokes
             .store(clamp_strokes(self.strokes), Ordering::SeqCst);
         let live = self.live.lock().map(|g| g.clone()).unwrap_or_default();
+        if !live.typing && !self.connecting {
+            if let Ok(mut g) = self.pending_update.lock() {
+                if let Some(path) = g.take() {
+                    let exe = typehack::install::installed_exe();
+                    if typehack::update::apply_now(&path, &exe).is_ok() {
+                        std::process::exit(0);
+                    }
+                }
+            }
+        }
         if live.connected || live.status.contains("fehl") || live.status.starts_with("Browser:") {
             self.connecting = false;
         }
@@ -262,6 +316,11 @@ impl eframe::App for App {
                                     ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
                                     self.persist();
                                 }
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.checkbox(&mut self.auto_update, ui_labels::AUTO_UPDATE).changed() {
+                                    self.persist();
+                                }
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     ui.label(RichText::new(format!("v{VERSION}")).color(COL_MUTED).size(11.0));
                                 });
@@ -283,7 +342,7 @@ impl App {
         self.persist();
         self.connecting = true;
         self.set_live(|l| {
-            l.status = "Starte Browser… Captcha? Seite wird neu geladen.".into();
+            l.status = "Starte Browser… Edge-Treiber wird bei Bedarf geladen.".into();
             l.badge = "verbindet".into();
         });
         let email = self.email.trim().to_string();
@@ -502,7 +561,7 @@ fn header(ui: &mut Ui, live: &Live) {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(RichText::new("TypeHack").color(COL_TEXT).size(26.0).strong());
-                    ui.label(RichText::new("native  ·  rust  ·  3.0.2").color(COL_ACCENT).size(12.0));
+                    ui.label(RichText::new("native  ·  rust  ·  3.1").color(COL_ACCENT).size(12.0));
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (dot, label) = if live.typing {
@@ -572,6 +631,17 @@ fn ghost_button(ui: &mut Ui, text: &str) -> egui::Response {
 
 fn main() -> eframe::Result<()> {
     println!("{WINDOW_TITLE}");
+    if typehack::update::apply_pending_and_should_exit() {
+        std::process::exit(0);
+    }
+    match typehack::install::ensure_installed() {
+        Ok(Some(exe)) => {
+            let _ = std::process::Command::new(exe).spawn();
+            std::process::exit(0);
+        }
+        Ok(None) => {}
+        Err(e) => eprintln!("{e}"),
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([440.0, 700.0])

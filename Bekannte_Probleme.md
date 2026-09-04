@@ -8,3 +8,4 @@
 6. **3.0.0** ist ein Rust-Rebuild (kein Python/Tk mehr). `TypeHack.py` bleibt nur als 2.x-Archiv. Starten mit `target\release\TypeHack.exe` / Desktop-Verknüpfung.
 7. **3.0.0 MAX Speed** war zu langsam, weil nach jeder Taste Selenium die Restzeile gelesen hat. **3.0.1** tippt die ganze Restzeile in einem OS-Burst (≥ 100000 Anschläge / 10 min).
 8. **3.0.1** tippte weiter im Burst, wenn MAX Speed noch an war oder ein alter Schreib-Loop lief. **3.0.2**: 2000 wählen schaltet MAX aus; der Takt gilt sofort.
+9. **3.1.0** installiert sich nach `%LOCALAPPDATA%\TypeHack`, lädt `msedgedriver` passend zu Edge und aktualisiert im Hintergrund von GitHub. Ohne Microsoft Edge geht Verbinden nicht.

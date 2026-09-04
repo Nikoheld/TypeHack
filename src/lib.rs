@@ -2,11 +2,14 @@
 //! The desktop UI (`src/main.rs`) and tests both call these shipped functions.
 
 pub mod config;
+pub mod driver;
+pub mod install;
 pub mod keys;
 pub mod nav;
 pub mod pace;
 pub mod prompt;
 pub mod ui_labels;
+pub mod update;
 pub mod version;
 
 pub use config::{load_config, load_credentials, merge_config, save_config, save_credentials, Config, PRESET_URLS};
@@ -20,4 +23,5 @@ pub use prompt::{
     extract_prompt_from_html, first_remaining_glyph, glyph_payload, glyphs_to_type, keys_for_char,
     normalize_prompt_text, pick_remaining_prompt, PromptError, PROMPT_SELECTORS,
 };
-pub use version::{APP_NAME, VERSION, WINDOW_TITLE};
+pub use version::{is_newer, parse_version, APP_NAME, REPO, VERSION, WINDOW_TITLE};
+pub use update::{digest_from_asset, pick_setup_asset, pick_update_asset, sha256_file, UpdateInfo};

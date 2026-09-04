@@ -9,7 +9,8 @@ pub const START: &str = "Start Typing";
 pub const STOP: &str = "Stop";
 pub const REMAINING: &str = "Restzeile";
 pub const MAX_SPEED: &str = "MAX Speed";
+pub const AUTO_UPDATE: &str = "Automatisch aktualisieren";
 
 pub fn all_controls() -> &'static [&'static str] {
-    &[EMAIL, PASSWORD, SERVER, RATE, CONNECT, START, STOP, REMAINING, MAX_SPEED]
+    &[EMAIL, PASSWORD, SERVER, RATE, CONNECT, START, STOP, REMAINING, MAX_SPEED, AUTO_UPDATE]
 }
