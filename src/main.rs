@@ -2,14 +2,17 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, CornerRadius, FontId, Frame, Margin, RichText, Stroke, Ui, Vec2};
 use typehack::config::{self, Config, PRESET_URLS};
-use typehack::pace::{clamp_strokes, due_after, interval_duration, interval_seconds, STROKES_MAX, STROKES_MIN};
+use typehack::pace::{
+    after_strokes_edited, clamp_strokes, due_after, interval_duration, interval_seconds, TypingMode, STROKES_DEFAULT,
+    STROKES_MAX, STROKES_MIN,
+};
 use typehack::ui_labels;
 use typehack::{VERSION, WINDOW_TITLE};
 
@@ -46,6 +49,9 @@ struct App {
     always_on_top: bool,
     live: Arc<Mutex<Live>>,
     stop: Arc<AtomicBool>,
+    live_max: Arc<AtomicBool>,
+    live_strokes: Arc<AtomicI32>,
+    loop_on: Arc<AtomicBool>,
     connecting: bool,
 }
 
@@ -73,6 +79,9 @@ impl App {
             always_on_top: cfg.always_on_top,
             live: Arc::new(Mutex::new(Live::default())),
             stop: Arc::new(AtomicBool::new(false)),
+            live_max: Arc::new(AtomicBool::new(cfg.max_speed)),
+            live_strokes: Arc::new(AtomicI32::new(clamp_strokes(cfg.strokes_per_10min))),
+            loop_on: Arc::new(AtomicBool::new(false)),
             connecting: false,
         }
     }
@@ -120,6 +129,9 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(80));
+        self.live_max.store(self.max_speed, Ordering::SeqCst);
+        self.live_strokes
+            .store(clamp_strokes(self.strokes), Ordering::SeqCst);
         let live = self.live.lock().map(|g| g.clone()).unwrap_or_default();
         if live.connected || live.status.contains("fehl") || live.status.starts_with("Browser:") {
             self.connecting = false;
@@ -161,27 +173,45 @@ impl eframe::App for App {
                                 ui.add_space(12.0);
                                 ui.label(RichText::new(ui_labels::RATE).color(COL_MUTED).size(12.0));
                                 ui.horizontal(|ui| {
-                                    ui.add_enabled(
-                                        !self.max_speed,
+                                    let drag = ui.add(
                                         egui::DragValue::new(&mut self.strokes)
                                             .range(STROKES_MIN..=STROKES_MAX)
-                                            .speed(10),
+                                            .speed(10)
+                                            .update_while_editing(true),
                                     );
-                                    ui.add_enabled(
-                                        !self.max_speed,
-                                        egui::Slider::new(&mut self.strokes, STROKES_MIN..=STROKES_MAX)
-                                            .show_value(false),
+                                    let slider = ui.add(
+                                        egui::Slider::new(&mut self.strokes, STROKES_MIN..=STROKES_MAX).show_value(false),
                                     );
+                                    if ui
+                                        .add_sized(
+                                            Vec2::new(52.0, 22.0),
+                                            egui::Button::new(RichText::new("2000").size(12.0)),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.strokes = STROKES_DEFAULT;
+                                        let (n, max) = after_strokes_edited(self.strokes);
+                                        self.strokes = n;
+                                        self.max_speed = max;
+                                        self.persist();
+                                    }
+                                    if drag.changed() || slider.changed() {
+                                        let (n, max) = after_strokes_edited(self.strokes);
+                                        self.strokes = n;
+                                        self.max_speed = max;
+                                        self.persist();
+                                    }
                                 });
                                 let n = clamp_strokes(self.strokes);
                                 if ui.checkbox(&mut self.max_speed, ui_labels::MAX_SPEED).changed() {
                                     self.persist();
                                 }
-                                let pace_txt = if self.max_speed {
-                                    "MAX Speed — ganze Restzeile, ≥ 100000 Anschläge / 10 min.".to_string()
+                                let mode = TypingMode::from_ui(n, self.max_speed);
+                                let pace_txt = if mode.is_max() {
+                                    "MAX Speed an — Anschläge-Zahl gilt nicht.".to_string()
                                 } else {
                                     let ms = (interval_seconds(n) * 1000.0).round() as i32;
-                                    format!("exakt {n} / 10 min  ·  {:.2} Anschläge/s  ·  {ms} ms", n as f64 / 600.0)
+                                    format!("Takt {n} / 10 min  ·  {:.2} Anschläge/s  ·  {ms} ms  ·  nicht MAX", n as f64 / 600.0)
                                 };
                                 ui.label(RichText::new(pace_txt).color(COL_MUTED).size(11.0));
                             });
@@ -294,25 +324,45 @@ impl App {
     }
 
     fn start_typing(&mut self) {
+        self.persist();
+        let strokes = clamp_strokes(self.strokes);
+        let max_speed = self.max_speed;
+        self.live_strokes.store(strokes, Ordering::SeqCst);
+        self.live_max.store(max_speed, Ordering::SeqCst);
         self.stop.store(false, Ordering::SeqCst);
+        let mode = TypingMode::from_ui(strokes, max_speed);
         self.set_live(|l| {
             l.typing = true;
             l.badge = "tippt".into();
-            l.status = "Schreibmodus an — Browser kommt in den Vordergrund.".into();
+            l.status = if mode.is_max() {
+                "MAX Speed — ganze Restzeile.".into()
+            } else {
+                format!("Takt {strokes}/10 min — eine Taste nach der anderen.")
+            };
         });
-        if self.always_on_top {
-            // drop always-on-top while typing so OS keys hit Edge
+        if self.loop_on.load(Ordering::SeqCst) {
+            return;
         }
+        self.loop_on.store(true, Ordering::SeqCst);
         let live = self.live.clone();
         let stop = self.stop.clone();
+        let live_max = self.live_max.clone();
+        let live_strokes = self.live_strokes.clone();
+        let loop_on = self.loop_on.clone();
         let base = self.base_url();
-        let strokes = clamp_strokes(self.strokes);
-        let max_speed = self.max_speed;
         thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("tokio");
             rt.block_on(async move {
-                let session = SESSION.lock().unwrap().take();
+                let mut session = None;
+                for _ in 0..50 {
+                    session = SESSION.lock().unwrap().take();
+                    if session.is_some() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
                 let Some(session) = session else {
+                    loop_on.store(false, Ordering::SeqCst);
                     if let Ok(mut g) = live.lock() {
                         g.typing = false;
                         g.status = "Zuerst verbinden.".into();
@@ -320,10 +370,19 @@ impl App {
                     return;
                 };
                 let _ = session.arm_and_focus(&base).await;
-                let interval = interval_duration(strokes, max_speed);
-                let t0 = std::time::Instant::now();
+                let mut t0 = std::time::Instant::now();
                 let mut sent: u64 = 0;
+                let mut prev_max = live_max.load(Ordering::SeqCst);
+                let mut prev_strokes = live_strokes.load(Ordering::SeqCst);
                 while !stop.load(Ordering::SeqCst) {
+                    let max_speed = live_max.load(Ordering::SeqCst);
+                    let strokes = clamp_strokes(live_strokes.load(Ordering::SeqCst));
+                    if max_speed != prev_max || strokes != prev_strokes {
+                        t0 = std::time::Instant::now();
+                        sent = 0;
+                        prev_max = max_speed;
+                        prev_strokes = strokes;
+                    }
                     if max_speed {
                         match session.type_line_max().await {
                             Ok((0, remaining, n)) => {
@@ -357,6 +416,7 @@ impl App {
                         }
                         continue;
                     }
+                    let interval = interval_duration(strokes, false);
                     let due = t0 + due_after(sent, interval);
                     let now = std::time::Instant::now();
                     if due > now {
@@ -364,6 +424,9 @@ impl App {
                     }
                     if stop.load(Ordering::SeqCst) {
                         break;
+                    }
+                    if live_max.load(Ordering::SeqCst) {
+                        continue;
                     }
                     match session.type_one().await {
                         Ok((ch, remaining, n)) => {
@@ -389,6 +452,7 @@ impl App {
                     }
                 }
                 SESSION.lock().unwrap().replace(session);
+                loop_on.store(false, Ordering::SeqCst);
                 if let Ok(mut g) = live.lock() {
                     g.typing = false;
                     g.badge = if g.connected { "verbunden".into() } else { "getrennt".into() };
@@ -438,7 +502,7 @@ fn header(ui: &mut Ui, live: &Live) {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(RichText::new("TypeHack").color(COL_TEXT).size(26.0).strong());
-                    ui.label(RichText::new("native  ·  rust  ·  3.0.1").color(COL_ACCENT).size(12.0));
+                    ui.label(RichText::new("native  ·  rust  ·  3.0.2").color(COL_ACCENT).size(12.0));
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (dot, label) = if live.typing {

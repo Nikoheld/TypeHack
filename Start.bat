@@ -13,5 +13,5 @@ if %errorlevel%==0 (
   cargo run --release --bin TypeHack
   exit /b %errorlevel%
 )
-echo TypeHack 3.0.1: cargo build --release
+echo TypeHack 3.0.2: cargo build --release
 pause

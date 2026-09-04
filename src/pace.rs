@@ -44,3 +44,37 @@ pub fn expected_strokes_per_10min(interval: Duration) -> f64 {
     }
     WINDOW_SECONDS / interval.as_secs_f64()
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypingMode {
+    Paced { strokes: i32 },
+    MaxSpeed,
+}
+
+impl TypingMode {
+    pub fn from_ui(strokes: i32, max_speed: bool) -> Self {
+        if max_speed {
+            TypingMode::MaxSpeed
+        } else {
+            TypingMode::Paced {
+                strokes: clamp_strokes(strokes),
+            }
+        }
+    }
+
+    pub fn is_max(self) -> bool {
+        matches!(self, TypingMode::MaxSpeed)
+    }
+
+    pub fn interval(self) -> Duration {
+        match self {
+            TypingMode::MaxSpeed => Duration::ZERO,
+            TypingMode::Paced { strokes } => interval_duration(strokes, false),
+        }
+    }
+}
+
+/// Editing Anschläge always leaves MAX Speed. 2000 → paced 0.3s, never a burst.
+pub fn after_strokes_edited(strokes: i32) -> (i32, bool) {
+    (clamp_strokes(strokes), false)
+}

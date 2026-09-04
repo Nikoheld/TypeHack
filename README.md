@@ -1,4 +1,4 @@
-# TypeHack 3.0.1
+# TypeHack 3.0.2
 
 Native **Rust** helper for [typewriter.at](https://www.typewriter.at) (public instance `at4.typewriter.at`).
 
@@ -16,12 +16,12 @@ The 2.x Python/Tk app is no longer the shipped runtime. **3.0** is a full rebuil
 
 Settings: `config.json`, login: `credentials.json` (gitignored).
 
-## What 3.0.1 does
+## What 3.0.2 does
 
 - Remaining prompt from `#text_todo_1` (empty span = space, skip done spans, umlauts, `*`).
 - Space = virtual key **32**. y/z/ö are characters, not KeyY/KeyZ.
-- Pace = Anschläge / 10 Minuten (200–8000, 2000 → 0.3 s wall-clock).
-- **MAX Speed** dumps the whole remaining line with OS keys (no Selenium between keystrokes), targeting **≥ 100000 Anschläge / 10 min**.
+- Pace = Anschläge / 10 Minuten (200–8000, **2000 → 0.3 s**). Changing the number **turns MAX Speed off**.
+- **MAX Speed** (checkbox only) dumps the whole remaining line with OS keys, targeting **≥ 100000 Anschläge / 10 min**. The Anschläge field does not apply while MAX is on.
 - After login stays on `user/overview`. Does **not** open `generateLevel`.
 - Captcha: reload only. Achievement cards: closed, never clicked.
 

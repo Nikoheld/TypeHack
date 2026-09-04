@@ -49,9 +49,9 @@ const TODO_AFTER_DONE_PARENT: &str = concat!(
 );
 
 #[test]
-fn version_is_3_0_1() {
-    assert_eq!(VERSION, "3.0.1");
-    assert_eq!(WINDOW_TITLE, "TypeHack 3.0.1");
+fn version_is_3_0_2() {
+    assert_eq!(VERSION, "3.0.2");
+    assert_eq!(WINDOW_TITLE, "TypeHack 3.0.2");
 }
 
 #[test]
@@ -75,6 +75,20 @@ fn wall_clock_schedule_hits_2000_per_10_min() {
     assert!((expected_strokes_per_10min(iv) - 2000.0).abs() < 1e-6);
     assert!(interval_duration(2000, true).is_zero());
     assert!(expected_strokes_per_10min(Duration::ZERO).is_infinite());
+}
+
+#[test]
+fn choosing_2000_is_paced_not_max() {
+    use std::time::Duration;
+    use typehack::pace::{after_strokes_edited, TypingMode};
+    assert_eq!(after_strokes_edited(2000), (2000, false));
+    let paced = TypingMode::from_ui(2000, false);
+    assert!(!paced.is_max());
+    assert_eq!(paced, TypingMode::Paced { strokes: 2000 });
+    assert!((paced.interval().as_secs_f64() - 0.3).abs() < 1e-12);
+    assert_ne!(paced.interval(), Duration::ZERO);
+    assert!(TypingMode::from_ui(2000, true).is_max());
+    assert!(TypingMode::from_ui(2000, true).interval().is_zero());
 }
 
 #[test]
