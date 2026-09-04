@@ -1,6 +1,5 @@
 {
-  "version": "2.5.0",
-  "installer_url": "https://github.com/Nikoheld/TypeHack/releases/download/v2.5.0/TypeHack-Setup-2.5.0.exe",
-  "sha256": "e15db2a86bb043d7e7805eb1106a8d7e4a82af2de2ee08f9c1bed7af21462452",
-  "notes": "Schreibmodus tippt wirklich: echte Windows-Tasten (keybd_event + Tastaturlayout), Lektion/Start-Dialog, Fokus auf das versteckte typewriter-Eingabefeld statt #text_todo_1."
+  "version": "3.0.0",
+  "runtime": "rust",
+  "notes": "Complete rebuild: native Rust UI + OS keystrokes into typewriter.at."
 }

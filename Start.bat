@@ -1,9 +1,17 @@
 @echo off
 cd /d "%~dp0"
-where py >nul 2>&1
-if %errorlevel%==0 (
-  py -3 TypeHack.py
-) else (
-  python TypeHack.py
+if exist "TypeHack.exe" (
+  start "" "TypeHack.exe"
+  exit /b 0
 )
+if exist "target\release\TypeHack.exe" (
+  start "" "target\release\TypeHack.exe"
+  exit /b 0
+)
+where cargo >nul 2>&1
+if %errorlevel%==0 (
+  cargo run --release --bin TypeHack
+  exit /b %errorlevel%
+)
+echo TypeHack 3.0.0: cargo build --release
 pause

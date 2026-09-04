@@ -1,53 +1,31 @@
-# TypeHack
+# TypeHack 3.0.0
 
-Hilfsprogramm für [typewriter.at](https://www.typewriter.at) (öffentliche Instanz `at4.typewriter.at`).
+Native **Rust** helper for [typewriter.at](https://www.typewriter.at) (public instance `at4.typewriter.at`).
 
-## Was neu ist
+The 2.x Python/Tk app is no longer the shipped runtime. **3.0.0** is a full rebuild: faster process, new desktop UI, same lesson facts that made 2.5.0 type into the hidden input.
 
-- **Kein mitgelieferter `msedgedriver.exe` mehr.** Selenium 4.27+ (Selenium Manager) holt den Treiber passend zur installierten Edge- oder Chrome-Version.
-- **Anschläge / 10 Minuten** einstellen — TypeHack tippt in genau dem Tempo.
-- Login füllt das Formular **sofort**, sobald Captcha/Consent weg ist (kein 20s-Warten, kein Seiten-Reload).
-- Leerzeichen werden als echte Space-Taste (keyCode 32) gesendet, nicht als leerer Text.
-- Tippen geht als echte Taste ins Browser-Fenster (OS-SendInput, Fallback JS/CDP). TypeHack nimmt sich während des Schreibmodus aus dem Vordergrund, klickt den Lektions-Dialog und prüft, ob `#text_todo_1` kürzer wird.
-- Start/Stop ist nicht mehr verdreht. Credentials liegen in `credentials.json` (steht in `.gitignore`).
+## Run (Windows)
 
-## Windows: Installer (kein Python nötig)
+1. [Rust](https://rustup.rs) (MSVC toolchain) and Microsoft Edge.
+2. `cargo test`
+3. `cargo run --release --bin TypeHack` or `Start.bat`
+4. E-Mail / Passwort, Server (AT/DE/CH), Anschläge / 10 Minuten.
+5. **Verbinden** — Captcha im Browser lösen.
+6. **Start Typing** — Edge-Fenster vorn lassen.
 
-1. Unter [Releases](https://github.com/Nikoheld/TypeHack/releases) **TypeHack-Setup-2.5.0.exe** laden.
-2. Installer starten (legt TypeHack nach `%LOCALAPPDATA%\TypeHack`, Desktop-Verknüpfung optional).
-3. **TypeHack** öffnen — Microsoft Edge ist auf Windows 10/11 schon da.
+Settings: `config.json`, login: `credentials.json` (gitignored).
 
-**Installer bauen (einmalig auf einem Windows-PC):** `build.bat` ausführen, dann `installer\TypeHack.iss` in [Inno Setup](https://jrsoftware.org/isinfo.php) kompilieren. Ergebnis: `dist\TypeHack-Setup-2.1.0.exe`.
+## What 3.0 does
 
-Oder GitHub Actions: Datei `installer/github-actions-build-windows.yml` nach `.github/workflows/build-windows.yml` kopieren und den Workflow starten — Artifact **TypeHack-Setup**.
+- Remaining prompt from `#text_todo_1` (empty span = space, skip done spans, umlauts, `*`).
+- One glyph at a time. Space = virtual key **32**. y/z/ö are characters, not KeyY/KeyZ.
+- Pace = Anschläge / 10 Minuten (200–8000, 2000 → 0.3 s).
+- Opens Schreiben / `generateLevel`, Start-Dialog, focuses the hidden typewriter field, then `keybd_event` + `VkKeyScanW`.
 
-## Windows einrichten (Entwickler, mit Python)
+## Build
 
-1. [Python 3.12+](https://www.python.org/downloads/) installieren, **Add python.exe to PATH** ankreuzen.
-2. `Installieren.bat` ausführen.
-3. `Start.bat` oder `py -3 TypeHack.py`.
-4. `Start.bat` öffnet das **TypeHack-Fenster** (kein Konsolen-Login mehr).
-5. E-Mail/Passwort, Server (AT/DE/CH/eigene URL), Browser, Tempo, Jitter, Tipp-Modus einstellen.
-6. **Verbinden** — Captcha im Browser lösen, falls nötig. Level wählen.
-7. **Start Typing**.
+```
+cargo build --release --bin TypeHack
+```
 
-Einstellungen liegen in `config.json`, Login in `credentials.json` (beide nicht im Git).
-
-## Auto-Update
-
-Die App prüft beim Start GitHub Releases. Gibt es eine neuere **TypeHack-Setup-*.exe**, kannst du sie installieren (SHA-256, stiller Inno-Setup, Neustart). Optionen: *Beim Start prüfen*, *Updates still installieren*.
-
-**Quit** schließt Browser + App. **Panic!** bricht nur das Python-Programm ab.
-
-## Abhängigkeiten
-
-Siehe `requirements.txt`:
-
-- selenium
-- colorama
-
-## Bekannte Grenzen
-
-- Die Tipp-Seite hängt an CSS/XPath-Kandidaten. Ändert typewriter.at das Layout, Selectors in `TypeHack.py` (`PROMPT_SELECTORS`) anpassen.
-- Server-IPs sehen oft nur die ALTCHA-Seite; ein normaler Schul-PC mit Edge kommt in der Regel durch.
-- Plus-Versionen: im GUI **Benutzerdefiniert** und die Schul-URL eintragen.
+Output: `target/release/TypeHack.exe`

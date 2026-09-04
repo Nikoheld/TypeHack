@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TypeHack — typewriter.at helper with a config-rich desktop UI."""
+"""Legacy TypeHack 2.x (Python/Tk). TypeHack 3.0.0 is the Rust binary (`cargo run --release --bin TypeHack`)."""
 
 from __future__ import annotations
 

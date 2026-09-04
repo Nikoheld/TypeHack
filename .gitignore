@@ -12,4 +12,5 @@ chromedriver.exe
 .DS_Store
 build/
 dist/
+target/
 *.spec.bak

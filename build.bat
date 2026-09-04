@@ -1,14 +1,15 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-where py >nul 2>&1
-if %errorlevel%==0 (set PY=py -3) else (set PY=python)
-
-echo Building TypeHack.exe ...
-%PY% -m pip install --upgrade pip
-%PY% -m pip install -r requirements.txt pyinstaller
-%PY% -m PyInstaller --noconfirm TypeHack.spec
+where cargo >nul 2>&1
+if %errorlevel% neq 0 (
+  echo Install Rust from https://rustup.rs and re-run build.bat
+  pause
+  exit /b 1
+)
+cargo test
+if %errorlevel% neq 0 exit /b 1
+cargo build --release --bin TypeHack
 echo.
-echo Frozen app: dist\TypeHack\TypeHack.exe
-echo Compile installer\TypeHack.iss with Inno Setup to get TypeHack-Setup-2.1.0.exe
+echo Built: target\release\TypeHack.exe
 pause
