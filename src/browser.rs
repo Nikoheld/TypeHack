@@ -2,11 +2,12 @@
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use thirtyfour::prelude::*;
 
-use typehack::keys::{force_foreground_typewriter, send_glyph};
+use typehack::keys::{force_foreground_typewriter, send_glyph, send_glyphs};
 use typehack::nav::{
     is_achievement_click_target, is_achievement_dialog, is_captcha_view, is_dashboard_url, is_start_dialog,
     OVERVIEW_PATH,
@@ -56,6 +57,7 @@ return htmls;
 pub struct BrowserSession {
     driver: WebDriver,
     child: Option<Child>,
+    last_burst: Mutex<Option<(String, Instant)>>,
 }
 
 impl BrowserSession {
@@ -94,6 +96,7 @@ impl BrowserSession {
         Ok(Self {
             driver,
             child: Some(child),
+            last_burst: Mutex::new(None),
         })
     }
 
@@ -159,7 +162,6 @@ impl BrowserSession {
 
     /// One remaining glyph. Does not sleep for pace — the caller owns the wall-clock schedule.
     pub async fn type_one(&self) -> Result<(char, String, usize), String> {
-        close_achievement_dialogs(&self.driver).await;
         focus_typer(&self.driver).await;
         let before = remaining_now(&self.driver)
             .await
@@ -168,6 +170,39 @@ impl BrowserSession {
         send_glyph(ch)?;
         let now = remaining_now(&self.driver).await.unwrap_or(before);
         Ok((ch, now.clone(), now.chars().count()))
+    }
+
+    /// Dump the whole remaining line via OS keys — no Selenium between keystrokes.
+    /// That's what makes MAX Speed (≥ 100000 / 10 min) possible.
+    /// Returns `(0, remaining, n)` when the same line is still on screen so the
+    /// caller waits instead of typing it twice. Retries after 80 ms if keys missed.
+    pub async fn type_line_max(&self) -> Result<(usize, String, usize), String> {
+        force_foreground_typewriter();
+        let before = remaining_now(&self.driver)
+            .await
+            .ok_or_else(|| "Tipptext ist leer".to_string())?;
+        let glyphs = typehack::glyphs_to_type(&before);
+        if glyphs.is_empty() {
+            return Err("Tipptext ist leer".into());
+        }
+        {
+            let last = self.last_burst.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((text, t0)) = last.as_ref() {
+                if text == &before && t0.elapsed() < Duration::from_millis(80) {
+                    return Ok((0, before.clone(), before.chars().count()));
+                }
+            }
+        }
+        send_glyphs(&glyphs)?;
+        if let Ok(mut last) = self.last_burst.lock() {
+            *last = Some((before.clone(), Instant::now()));
+        }
+        // Short drain wait, not a Selenium poll loop. 50-char line + 20 ms still ≫ 100000/10 min.
+        let wait_ms = (2 + glyphs.len() / 8).min(20) as u64;
+        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+        let now = remaining_now(&self.driver).await.unwrap_or_default();
+        let n = now.chars().count();
+        Ok((glyphs.len(), now, n))
     }
 
     pub async fn quit(mut self) {

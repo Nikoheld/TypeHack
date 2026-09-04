@@ -49,9 +49,9 @@ const TODO_AFTER_DONE_PARENT: &str = concat!(
 );
 
 #[test]
-fn version_is_3_0_0() {
-    assert_eq!(VERSION, "3.0.0");
-    assert_eq!(WINDOW_TITLE, "TypeHack 3.0.0");
+fn version_is_3_0_1() {
+    assert_eq!(VERSION, "3.0.1");
+    assert_eq!(WINDOW_TITLE, "TypeHack 3.0.1");
 }
 
 #[test]
@@ -75,6 +75,19 @@ fn wall_clock_schedule_hits_2000_per_10_min() {
     assert!((expected_strokes_per_10min(iv) - 2000.0).abs() < 1e-6);
     assert!(interval_duration(2000, true).is_zero());
     assert!(expected_strokes_per_10min(Duration::ZERO).is_infinite());
+}
+
+#[test]
+fn max_speed_beats_100000_per_10_min() {
+    use std::time::Duration;
+    use typehack::pace::{expected_strokes_per_10min, interval_duration, MAX_SPEED_MIN_STROKES};
+    assert_eq!(MAX_SPEED_MIN_STROKES, 100_000);
+    let iv = interval_duration(2000, true);
+    assert!(iv.is_zero());
+    let ceiling = Duration::from_secs_f64(600.0 / f64::from(MAX_SPEED_MIN_STROKES));
+    assert!(iv < ceiling, "MAX must be faster than 6 ms/Taste");
+    assert!(expected_strokes_per_10min(iv) > f64::from(MAX_SPEED_MIN_STROKES));
+    assert!(send_glyphs(&[]).is_ok());
 }
 
 #[test]

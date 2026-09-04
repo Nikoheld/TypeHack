@@ -5,6 +5,8 @@ use std::time::Duration;
 pub const STROKES_MIN: i32 = 200;
 pub const STROKES_MAX: i32 = 8000;
 pub const STROKES_DEFAULT: i32 = 2000;
+/// MAX Speed must beat this (100000 Anschläge / 10 min ≈ 6 ms/Taste).
+pub const MAX_SPEED_MIN_STROKES: i32 = 100_000;
 const WINDOW_SECONDS: f64 = 600.0;
 
 pub fn clamp_strokes(n: impl Into<f64>) -> i32 {

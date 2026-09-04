@@ -1,4 +1,4 @@
-//! TypeHack 3.0.0 desktop UI — native Rust, not the 2.x Tk window.
+//! TypeHack 3.0 desktop UI — native Rust, not the 2.x Tk window.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -178,7 +178,7 @@ impl eframe::App for App {
                                     self.persist();
                                 }
                                 let pace_txt = if self.max_speed {
-                                    "MAX Speed — so schnell wie die Lektion mitkommt.".to_string()
+                                    "MAX Speed — ganze Restzeile, ≥ 100000 Anschläge / 10 min.".to_string()
                                 } else {
                                     let ms = (interval_seconds(n) * 1000.0).round() as i32;
                                     format!("exakt {n} / 10 min  ·  {:.2} Anschläge/s  ·  {ms} ms", n as f64 / 600.0)
@@ -324,6 +324,39 @@ impl App {
                 let t0 = std::time::Instant::now();
                 let mut sent: u64 = 0;
                 while !stop.load(Ordering::SeqCst) {
+                    if max_speed {
+                        match session.type_line_max().await {
+                            Ok((0, remaining, n)) => {
+                                if let Ok(mut g) = live.lock() {
+                                    g.remaining = remaining;
+                                    g.status = format!("MAX · wartet auf nächste Zeile · noch {n}");
+                                    g.typing = true;
+                                    g.badge = "tippt".into();
+                                }
+                                tokio::time::sleep(Duration::from_millis(8)).await;
+                            }
+                            Ok((n_keys, remaining, n)) => {
+                                sent += n_keys as u64;
+                                if let Ok(mut g) = live.lock() {
+                                    g.remaining = remaining;
+                                    g.status = format!("MAX · {n_keys} Tasten · gesamt {sent} · noch {n}");
+                                    g.typing = true;
+                                    g.badge = "tippt".into();
+                                }
+                            }
+                            Err(e) => {
+                                if stop.load(Ordering::SeqCst) {
+                                    break;
+                                }
+                                if let Ok(mut g) = live.lock() {
+                                    g.status = format!("Kein Tipptext — {e}");
+                                }
+                                let _ = session.arm_and_focus(&base).await;
+                                tokio::time::sleep(Duration::from_millis(40)).await;
+                            }
+                        }
+                        continue;
+                    }
                     let due = t0 + due_after(sent, interval);
                     let now = std::time::Instant::now();
                     if due > now {
@@ -338,12 +371,7 @@ impl App {
                             if let Ok(mut g) = live.lock() {
                                 g.remaining = remaining;
                                 let show = if ch == ' ' { "␣".into() } else { ch.to_string() };
-                                let pace = if max_speed {
-                                    "MAX".to_string()
-                                } else {
-                                    format!("{strokes}/10min")
-                                };
-                                g.status = format!("Tippt »{show}« · {pace} · noch {n}");
+                                g.status = format!("Tippt »{show}« · {strokes}/10min · noch {n}");
                                 g.typing = true;
                                 g.badge = "tippt".into();
                             }
@@ -410,7 +438,7 @@ fn header(ui: &mut Ui, live: &Live) {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(RichText::new("TypeHack").color(COL_TEXT).size(26.0).strong());
-                    ui.label(RichText::new("native  ·  rust  ·  3.0").color(COL_ACCENT).size(12.0));
+                    ui.label(RichText::new("native  ·  rust  ·  3.0.1").color(COL_ACCENT).size(12.0));
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (dot, label) = if live.typing {

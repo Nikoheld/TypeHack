@@ -1,5 +1,5 @@
 {
-  "version": "3.0.0",
+  "version": "3.0.1",
   "runtime": "rust",
-  "notes": "Complete rebuild: native Rust UI + OS keystrokes into typewriter.at."
+  "notes": "MAX Speed dumps the remaining line as one OS burst (≥ 100000 Anschläge / 10 min)."
 }

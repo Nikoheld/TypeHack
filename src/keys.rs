@@ -61,6 +61,28 @@ fn layout_plan(_ch: char) -> Option<KeyPlan> {
     None
 }
 
+/// Fire the whole remaining line in one OS burst. No Selenium between keys.
+/// Sequential `keybd_event` is the fallback; a single `SendInput` array is the fast path.
+pub fn send_glyphs(chars: &[char]) -> Result<(), String> {
+    if chars.is_empty() {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        if send_glyphs_batch(chars).is_ok() {
+            return Ok(());
+        }
+        for &ch in chars {
+            send_glyph(ch)?;
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("OS-Tasten nur unter Windows".into())
+    }
+}
+
 #[cfg(windows)]
 pub fn send_glyph(ch: char) -> Result<(), String> {
     let plan = key_plan_for_glyph(ch);
@@ -96,6 +118,96 @@ pub fn send_glyph(ch: char) -> Result<(), String> {
 #[cfg(not(windows))]
 pub fn send_glyph(_ch: char) -> Result<(), String> {
     Err("OS-Tasten nur unter Windows".into())
+}
+
+#[cfg(windows)]
+fn send_glyphs_batch(chars: &[char]) -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        KEYEVENTF_UNICODE, VIRTUAL_KEY,
+    };
+    fn vk_event(vk: u16, up: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(vk),
+                    wScan: 0,
+                    dwFlags: if up {
+                        KEYEVENTF_KEYUP
+                    } else {
+                        KEYBD_EVENT_FLAGS::default()
+                    },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+    fn unicode_event(code: u16, up: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(0),
+                    wScan: code,
+                    dwFlags: if up {
+                        KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+                    } else {
+                        KEYEVENTF_UNICODE
+                    },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+    let mut inputs: Vec<INPUT> = Vec::with_capacity(chars.len() * 4);
+    let mut shift_down = false;
+    for &ch in chars {
+        let plan = key_plan_for_glyph(ch);
+        if plan.vk == 0 {
+            if shift_down {
+                inputs.push(vk_event(SHIFT_VIRTUAL_KEY, true));
+                shift_down = false;
+            }
+            let code = crate::prompt::keys_for_char(ch) as u16;
+            inputs.push(unicode_event(code, false));
+            inputs.push(unicode_event(code, true));
+            continue;
+        }
+        if plan.ctrl {
+            inputs.push(vk_event(0x11, false));
+        }
+        if plan.alt {
+            inputs.push(vk_event(0x12, false));
+        }
+        if plan.shift && !shift_down {
+            inputs.push(vk_event(SHIFT_VIRTUAL_KEY, false));
+            shift_down = true;
+        } else if !plan.shift && shift_down {
+            inputs.push(vk_event(SHIFT_VIRTUAL_KEY, true));
+            shift_down = false;
+        }
+        inputs.push(vk_event(plan.vk, false));
+        inputs.push(vk_event(plan.vk, true));
+        if plan.alt {
+            inputs.push(vk_event(0x12, true));
+        }
+        if plan.ctrl {
+            inputs.push(vk_event(0x11, true));
+        }
+    }
+    if shift_down {
+        inputs.push(vk_event(SHIFT_VIRTUAL_KEY, true));
+    }
+    unsafe {
+        let sent = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        if sent as usize != inputs.len() {
+            return Err(format!("SendInput {sent}/{}", inputs.len()));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
