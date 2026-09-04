@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
+import os
 import random
 import sys
 import threading
@@ -34,7 +36,7 @@ def app_dir() -> Path:
 BASE_DIR = app_dir()
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 CONFIG_FILE = BASE_DIR / "config.json"
-VERSION = "2.4.4"
+VERSION = "2.5.0"
 
 PRESET_URLS = {
     "Österreich (at4)": "https://at4.typewriter.at",
@@ -118,6 +120,22 @@ PROMPT_SELECTORS = [
     (By.CSS_SELECTOR, ".current-line"),
     (By.CSS_SELECTOR, "[data-prompt]"),
     (By.CSS_SELECTOR, ".letter, .char, span.letter, span.char"),
+]
+START_CLICK = [
+    (By.CSS_SELECTOR, ".ui-dialog-buttonset button"),
+    (By.CSS_SELECTOR, ".ui-dialog-buttonset .ui-button"),
+    (By.CSS_SELECTOR, "div.ui-dialog button"),
+    (By.CLASS_NAME, "cockpitStartButton"),
+    (By.CSS_SELECTOR, "a.cockpitStartButton, button.cockpitStartButton"),
+    (By.XPATH, "//button[contains(., 'OK') or contains(., 'Start') or contains(., 'Weiter') or contains(., 'Begin') or contains(., 'Los') or contains(., 'Übung')]"),
+    (By.XPATH, "//span[contains(@class,'ui-button-text') and (contains(.,'OK') or contains(.,'Start') or contains(.,'Weiter') or contains(.,'Los'))]"),
+]
+WRITE_CLICK = [
+    (By.CLASS_NAME, "cockpitStartButton"),
+    (By.CSS_SELECTOR, "a.cockpitStartButton, button.cockpitStartButton"),
+    (By.CSS_SELECTOR, "a[href*='generateLevel'], a[href*='runLevel']"),
+    (By.XPATH, "//a[contains(., 'Schreiben') and not(contains(., 'Abmelden'))]"),
+    (By.XPATH, "//a[contains(@href,'typewriter/generateLevel') or contains(@href,'typewriter/runLevel')]"),
 ]
 
 PALETTE = {
@@ -535,17 +553,466 @@ def pass_altcha_then_reload(driver) -> bool:
 
 
 def focus_typer(driver) -> None:
+    """Focus the hidden typewriter input. Do not click #text_todo_1 — that steals focus."""
     try:
         driver.execute_script(
-            "var sels=['#text_todo_1','[id^=text_todo]','#typewriter-text',"
-            "'.typewriter-text','#textToType','.current-line','.tw-text','#twCanvas','canvas','body'];"
-            "for (var i=0;i<sels.length;i++){"
-            "  var e=document.querySelector(sels[i]);"
-            "  if(e){ try{e.click();}catch(x){} try{e.focus();}catch(x){} return; }"
+            "window.focus();"
+            "if (typeof setFocusMobileText === 'function') { try { setFocusMobileText(); } catch (x) {} }"
+            "var nodes=document.querySelectorAll('input,textarea');"
+            "for (var i=0;i<nodes.length;i++){"
+            "  var e=nodes[i];"
+            "  var id=(e.id||''), name=(e.name||''), tp=(e.type||'').toLowerCase();"
+            "  if (tp==='password' || tp==='hidden' || tp==='submit' || tp==='button') continue;"
+            "  if (/login|user|email|pass/i.test(id+' '+name)) continue;"
+            "  try { e.focus({preventScroll:true}); return id||name||tp; } catch (x) {}"
             "}"
         )
     except Exception:
         pass
+
+
+# Sticky name of the send method that last moved the remaining prompt.
+_PREFERRED_SEND: list[str] = []
+SEND_METHODS = ("os", "js", "cdp", "chains")
+
+# Win32 keyboard / window helpers (OS-level keys land even when CDP does not).
+ULONG_PTR = ctypes.c_size_t
+VK_SPACE = 0x20
+VK_RETURN = 0x0D
+VK_MENU = 0x12
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_UNICODE = 0x0004
+INPUT_KEYBOARD = 1
+SW_RESTORE = 9
+SW_SHOW = 5
+_JS_SEND_GLYPH = r"""
+var ch = arguments[0];
+var which = (ch === ' ' || ch === '\xa0') ? 32 : ch.charCodeAt(0);
+var key = (ch === ' ' || ch === '\xa0') ? ' ' : ch;
+var code = (key === ' ') ? 'Space' : '';
+function fire(target, type) {
+  if (!target || !target.dispatchEvent) return;
+  var init = {
+    key: key, code: code, bubbles: true, cancelable: true, composed: true,
+    keyCode: which, which: which, charCode: type === 'keypress' ? which : 0,
+    view: window
+  };
+  var ev;
+  try { ev = new KeyboardEvent(type, init); } catch (e) { return; }
+  try {
+    Object.defineProperty(ev, 'keyCode', {get: function(){return which;}});
+    Object.defineProperty(ev, 'which', {get: function(){return which;}});
+    Object.defineProperty(ev, 'charCode', {get: function(){return type === 'keypress' ? which : 0;}});
+    Object.defineProperty(ev, 'key', {get: function(){return key;}});
+  } catch (e) {}
+  target.dispatchEvent(ev);
+}
+var nodes = [document.activeElement, document.getElementById('text_todo_1'), document.body, document];
+var seen = [];
+nodes.forEach(function(n) {
+  if (!n || seen.indexOf(n) >= 0) return;
+  seen.push(n);
+  fire(n, 'keydown'); fire(n, 'keypress'); fire(n, 'keyup');
+});
+if (window.jQuery) {
+  ['keydown','keypress','keyup'].forEach(function(type) {
+    var je = jQuery.Event(type);
+    je.which = which; je.keyCode = which; je.charCode = which; je.key = key;
+    jQuery(document).trigger(je);
+    jQuery('body').trigger(je);
+    jQuery('#text_todo_1').trigger(je);
+  });
+}
+return true;
+"""
+
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = (
+        ("wVk", ctypes.c_ushort),
+        ("wScan", ctypes.c_ushort),
+        ("dwFlags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ULONG_PTR),
+    )
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = (
+        ("dx", ctypes.c_long),
+        ("dy", ctypes.c_long),
+        ("mouseData", ctypes.c_ulong),
+        ("dwFlags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ULONG_PTR),
+    )
+
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = (
+        ("uMsg", ctypes.c_ulong),
+        ("wParamL", ctypes.c_ushort),
+        ("wParamH", ctypes.c_ushort),
+    )
+
+
+class _INPUT(ctypes.Structure):
+    class _U(ctypes.Union):
+        _fields_ = (("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT), ("hi", _HARDWAREINPUT))
+
+    _anonymous_ = ("u",)
+    _fields_ = (("type", ctypes.c_ulong), ("u", _U))
+
+
+def preferred_send() -> str | None:
+    return _PREFERRED_SEND[0] if _PREFERRED_SEND else None
+
+
+def remember_send(name: str | None) -> None:
+    _PREFERRED_SEND.clear()
+    if name:
+        _PREFERRED_SEND.append(name)
+
+
+def remaining_prompt_now(driver) -> str | None:
+    """Current remaining prompt, or None if it cannot be read yet."""
+    try:
+        return pick_remaining_prompt(collect_prompt_html(driver))
+    except Exception:
+        return None
+
+
+def first_remaining_glyph(text: str) -> str:
+    glyphs = glyphs_to_type(text)
+    if not glyphs:
+        raise TimeoutException("Tipptext ist leer")
+    return glyphs[0]
+
+
+def _send_input(inputs: list[_INPUT]) -> None:
+    if not inputs or os.name != "nt":
+        raise OSError("SendInput nur unter Windows")
+    arr = (_INPUT * len(inputs))(*inputs)
+    sent = ctypes.windll.user32.SendInput(len(inputs), ctypes.byref(arr), ctypes.sizeof(_INPUT))
+    if sent != len(inputs):
+        raise OSError(f"SendInput {sent}/{len(inputs)}")
+
+
+def _vk_down(vk: int) -> None:
+    # keybd_event reaches Chromium; SendInput often does not (UIPI / focus).
+    ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+
+
+def _vk_up(vk: int) -> None:
+    ctypes.windll.user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+
+
+def _vk_tap(vk: int) -> None:
+    _vk_down(vk)
+    _vk_up(vk)
+
+
+def _unicode_tap(ch: str) -> None:
+    code = ord(ch)
+    down = _INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(0, code, KEYEVENTF_UNICODE, 0, 0))
+    up = _INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, 0))
+    _send_input([down, up])
+
+
+def os_send_glyph(ch: str) -> None:
+    """Real OS keystroke into the foreground window (the Edge/Chrome lesson)."""
+    ch = keys_for_char(ch)
+    if os.name != "nt":
+        raise OSError("OS-Tasten nur unter Windows")
+    if ch == " ":
+        _vk_tap(VK_SPACE)
+        return
+    if ch == "\n":
+        _vk_tap(VK_RETURN)
+        return
+    scan = ctypes.windll.user32.VkKeyScanW(ord(ch))
+    if scan == -1 or scan == 0xFFFF:
+        _unicode_tap(ch)
+        return
+    vk = scan & 0xFF
+    shift = bool(scan & 0x100)
+    ctrl = bool(scan & 0x200)
+    alt = bool(scan & 0x400)
+    if shift:
+        _vk_down(0x10)
+    if ctrl:
+        _vk_down(0x11)
+    if alt:
+        _vk_down(0x12)
+    _vk_tap(vk)
+    if alt:
+        _vk_up(0x12)
+    if ctrl:
+        _vk_up(0x11)
+    if shift:
+        _vk_up(0x10)
+
+
+def _window_title(hwnd: int) -> str:
+    n = ctypes.windll.user32.GetWindowTextLengthW(hwnd) + 1
+    buf = ctypes.create_unicode_buffer(n)
+    ctypes.windll.user32.GetWindowTextW(hwnd, buf, n)
+    return buf.value
+
+
+def _window_class(hwnd: int) -> str:
+    buf = ctypes.create_unicode_buffer(256)
+    ctypes.windll.user32.GetClassNameW(hwnd, buf, 256)
+    return buf.value
+
+
+def chrome_hwnds() -> list[int]:
+    found: list[int] = []
+    if os.name != "nt":
+        return found
+
+    @ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_ssize_t)
+    def cb(hwnd, _lparam):
+        if not ctypes.windll.user32.IsWindowVisible(hwnd):
+            return 1
+        cls = _window_class(hwnd)
+        if cls != "Chrome_WidgetWin_1":
+            return 1
+        title = _window_title(hwnd)
+        if not title or title.lower() == "typehack":
+            return 1
+        found.append(int(hwnd))
+        return 1
+
+    ctypes.windll.user32.EnumWindows(cb, 0)
+    return found
+
+
+def pick_browser_hwnd(driver=None) -> int | None:
+    hwnds = chrome_hwnds()
+    if not hwnds:
+        return None
+    needle = ""
+    try:
+        needle = ((driver.title if driver is not None else "") or "").strip().lower()
+    except Exception:
+        needle = ""
+    scored: list[tuple[int, int]] = []
+    skip = ("discord", "nzxt", "kennwort", "password", "spotify", "slack", "teams", "vscode", "cursor")
+    for hwnd in hwnds:
+        title = _window_title(hwnd).lower()
+        if any(bit in title for bit in skip):
+            continue
+        score = 0
+        if "typewriter" in title:
+            score += 12
+        if needle and needle[:24] in title:
+            score += 8
+        if "microsoft edge" in title or "google chrome" in title:
+            score += 3
+        if "data:;," in title or title.startswith("data:"):
+            score -= 5
+        scored.append((score, hwnd))
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    return scored[0][1]
+
+
+def force_foreground(hwnd: int) -> bool:
+    """Bring hwnd to the front without injecting Alt into the page."""
+    if not hwnd or os.name != "nt":
+        return False
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    user32.ShowWindow(hwnd, SW_RESTORE)
+    user32.ShowWindow(hwnd, SW_SHOW)
+    if user32.GetForegroundWindow() == hwnd:
+        return True
+    fg = user32.GetForegroundWindow()
+    fg_thread = user32.GetWindowThreadProcessId(fg, None)
+    cur_thread = kernel32.GetCurrentThreadId()
+    attached = False
+    if fg_thread and cur_thread and fg_thread != cur_thread:
+        attached = bool(user32.AttachThreadInput(cur_thread, fg_thread, True))
+    user32.BringWindowToTop(hwnd)
+    ok = bool(user32.SetForegroundWindow(hwnd))
+    if attached:
+        user32.AttachThreadInput(cur_thread, fg_thread, False)
+    return ok or user32.GetForegroundWindow() == hwnd
+
+
+def foreground_browser(driver) -> bool:
+    """Put the Selenium Edge/Chrome window in front so OS keystrokes hit the lesson."""
+    try:
+        driver.switch_to.window(driver.current_window_handle)
+    except Exception:
+        pass
+    try:
+        driver.execute_script("window.focus();")
+    except Exception:
+        pass
+    hwnd = pick_browser_hwnd(driver)
+    if hwnd:
+        return force_foreground(hwnd)
+    return False
+
+
+def js_send_glyph(driver, glyph: str) -> None:
+    driver.execute_script(_JS_SEND_GLYPH, keys_for_char(glyph))
+
+
+def cdp_send_glyph(driver, glyph: str) -> None:
+    info = glyph_payload(glyph)
+    vk = int(info.get("vk") or 0)
+    if info["glyph"] == " ":
+        vk = VK_SPACE
+    common = {
+        "key": info["key"],
+        "code": info["code"] or ("Space" if info["glyph"] == " " else ""),
+        "windowsVirtualKeyCode": vk,
+        "nativeVirtualKeyCode": vk,
+        "text": info["text"],
+        "unmodifiedText": info["text"],
+    }
+    driver.execute_cdp_cmd("Input.dispatchKeyEvent", {**common, "type": "keyDown"})
+    if info["text"]:
+        driver.execute_cdp_cmd(
+            "Input.dispatchKeyEvent",
+            {"type": "char", "key": info["key"], "text": info["text"], "unmodifiedText": info["text"]},
+        )
+    driver.execute_cdp_cmd("Input.dispatchKeyEvent", {**common, "type": "keyUp"})
+
+
+def chains_send_glyph(driver, glyph: str) -> None:
+    from selenium.webdriver.common.action_chains import ActionChains
+
+    ActionChains(driver).send_keys(keys_for_char(glyph)).perform()
+
+
+def _dispatch_glyph(driver, glyph: str, method: str) -> None:
+    if method == "os":
+        os_send_glyph(glyph)
+    elif method == "js":
+        js_send_glyph(driver, glyph)
+    elif method == "cdp":
+        cdp_send_glyph(driver, glyph)
+    elif method == "chains":
+        chains_send_glyph(driver, glyph)
+    else:
+        raise ValueError(method)
+
+
+def _click_first(driver, locators) -> bool:
+    for by, value in locators:
+        try:
+            els = driver.find_elements(by, value)
+        except Exception:
+            continue
+        for el in els:
+            try:
+                if not el.is_displayed():
+                    continue
+                href = (el.get_attribute("href") or "").lower()
+                text = (el.text or "").lower()
+                if "logout" in href or "abmelden" in text or "site/logout" in href:
+                    continue
+                try:
+                    el.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", el)
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def open_write_mode(driver, base: str | None = None) -> bool:
+    """From the overview, open Schreiben / generateLevel so #text_todo_1 exists."""
+    if remaining_prompt_now(driver):
+        return True
+    if _click_first(driver, WRITE_CLICK):
+        time.sleep(0.6)
+        if remaining_prompt_now(driver):
+            return True
+    if base:
+        for path in ("/index.php?r=typewriter/generateLevel", LEVEL_PATH):
+            try:
+                driver.get(base.rstrip("/") + path)
+                time.sleep(0.5)
+            except Exception:
+                continue
+            if remaining_prompt_now(driver):
+                return True
+    return remaining_prompt_now(driver) is not None
+
+
+def arm_lesson(driver, base: str | None = None) -> bool:
+    """Open Schreibmodus, click start/OK dialogs, send Enter so the lesson hears keys."""
+    opened = open_write_mode(driver, base)
+    clicked = _click_first(driver, START_CLICK)
+    focus_typer(driver)
+    try:
+        os_send_glyph("\n")
+    except Exception:
+        try:
+            chains_send_glyph(driver, "\n")
+        except Exception:
+            pass
+    return opened or clicked
+
+
+def send_glyph(driver, glyph: str, *, method: str | None = None) -> str:
+    """Deliver one remaining glyph. Default: OS key into the focused browser, then JS/CDP/chains."""
+    glyph = keys_for_char(glyph)
+    focus_typer(driver)
+    order: list[str] = []
+    if method:
+        order = [method]
+    else:
+        pref = preferred_send()
+        order = list(SEND_METHODS)
+        if pref in order:
+            order.remove(pref)
+            order.insert(0, pref)
+    last_error: Exception | None = None
+    for name in order:
+        try:
+            _dispatch_glyph(driver, glyph, name)
+            remember_send(name)
+            return name
+        except Exception as exc:
+            last_error = exc
+            continue
+    if last_error:
+        raise last_error
+    raise RuntimeError("kein Tipp-Verfahren")
+
+
+def send_glyph_verified(driver, glyph: str, before: str, *, settle_s: float = 0.12) -> str | None:
+    """Try send methods until the remaining prompt actually changes."""
+    glyph = keys_for_char(glyph)
+    methods: list[str] = []
+    pref = preferred_send()
+    if pref:
+        methods.append(pref)
+    for name in SEND_METHODS:
+        if name not in methods:
+            methods.append(name)
+    for name in methods:
+        try:
+            send_glyph(driver, glyph, method=name)
+        except Exception:
+            continue
+        time.sleep(max(0.0, settle_s))
+        after = remaining_prompt_now(driver)
+        if after is None:
+            remember_send(name)
+            return name
+        if after != before:
+            remember_send(name)
+            return name
+    return None
 
 
 CAPTCHA_RELOAD_S = 2.0
@@ -593,22 +1060,6 @@ def maybe_reload_stuck_captcha(driver, seen_since: float | None, now: float | No
     return now
 
 
-def send_glyph(driver, glyph: str) -> None:
-    """Deliver the glyph at document level. #text_todo_1 is not an input — send_keys on it is a no-op."""
-    from selenium.webdriver.common.action_chains import ActionChains
-
-    glyph = keys_for_char(glyph)
-    try:
-        box = driver.find_element(By.ID, "text_todo_1")
-        try:
-            box.click()
-        except Exception:
-            pass
-    except Exception:
-        pass
-    ActionChains(driver).send_keys(glyph).perform()
-
-
 def type_char(driver, ch: str) -> None:
     """One remaining glyph as a real character. Layout-independent: send the glyph, not KeyY/KeyZ."""
     send_glyph(driver, keys_for_char(ch))
@@ -616,18 +1067,40 @@ def type_char(driver, ch: str) -> None:
 
 def _stealth(options) -> None:
     options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--remote-allow-origins=*")
+    options.add_argument("--no-first-run")
+    options.add_argument("--disable-popup-blocking")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
 
 
+def _first_existing(*paths: str) -> str | None:
+    for path in paths:
+        if Path(path).is_file():
+            return path
+    return None
+
+
 def build_edge():
     options = EdgeOptions()
+    binary = _first_existing(
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    )
+    if binary:
+        options.binary_location = binary
     _stealth(options)
     return webdriver.Edge(options=options)
 
 
 def build_chrome():
     options = ChromeOptions()
+    binary = _first_existing(
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    )
+    if binary:
+        options.binary_location = binary
     _stealth(options)
     return webdriver.Chrome(options=options)
 
@@ -1003,10 +1476,14 @@ class TypeHackApp:
     def _connect_worker(self, email: str, password: str) -> None:
         try:
             self.driver = create_driver(self.cfg.get("browser") or "Auto")
+            try:
+                self.driver.maximize_window()
+            except Exception:
+                pass
             self.login(email, password)
             self.connected = True
             self.set_badge("●  verbunden")
-            self.set_status("Verbunden. Level wählen, dann Start Typing.")
+            self.set_status("Verbunden. Level wählen, dann Schreibmodus / Start Typing.")
             if self.root:
                 self.root.after(0, lambda: self.start_button.config(state="normal"))
                 self.root.after(0, lambda: self.connect_button.config(text="Verbunden", state="disabled"))
@@ -1023,6 +1500,24 @@ class TypeHackApp:
                     pass
                 self.driver = None
 
+    def _set_topmost(self, value: bool) -> None:
+        def apply() -> None:
+            try:
+                if self.root:
+                    self.root.attributes("-topmost", bool(value))
+            except Exception:
+                pass
+
+        if not self.root:
+            return
+        try:
+            if threading.current_thread() is threading.main_thread():
+                apply()
+            else:
+                self.root.after(0, apply)
+        except Exception:
+            pass
+
     def toggle_typing(self) -> None:
         if self.typing:
             self.stop_typing()
@@ -1032,9 +1527,11 @@ class TypeHackApp:
             return
         self.stop_flag.clear()
         self.typing = True
+        remember_send(None)
+        self._set_topmost(False)
         self.start_button.config(text="Stop Typing")
         self.set_badge("●  tippt")
-        self.set_status("Tippt… Typewriter-Fenster sichtbar lassen.")
+        self.set_status("Schreibmodus an — Browser kommt in den Vordergrund.")
         threading.Thread(target=self.start_typing, daemon=True).start()
 
     def stop_typing(self) -> None:
@@ -1044,6 +1541,7 @@ class TypeHackApp:
             self.start_button.config(text="Start Typing")
         self.set_badge("●  verbunden" if self.connected else "●  getrennt")
         self.set_status("Gestoppt.")
+        self._apply_topmost()
 
     def quit_callback(self) -> None:
         self.stop_flag.set()
@@ -1116,7 +1614,8 @@ class TypeHackApp:
             self.set_status("Login-Wartezeit vorbei — wenn du drin bist, Level manuell öffnen.")
         if cfg.get("open_level_page"):
             try:
-                self.driver.get(base + LEVEL_PATH)
+                if not open_write_mode(self.driver, base):
+                    self.driver.get(base + LEVEL_PATH)
             except Exception:
                 pass
 
@@ -1126,30 +1625,56 @@ class TypeHackApp:
 
     def start_typing(self) -> None:
         try:
+            self._set_topmost(False)
+            time.sleep(0.25)
+            cfg = self.current_config()
+            base = str(cfg.get("base_url") or DEFAULT_CONFIG["base_url"])
+            foreground_browser(self.driver)
+            arm_lesson(self.driver, base)
             focus_typer(self.driver)
             captcha_since: float | None = None
+            stalls = 0
             while not self.stop_flag.is_set():
                 captcha_since = maybe_reload_stuck_captcha(self.driver, captcha_since)
                 cfg = self.current_config()
+                base = str(cfg.get("base_url") or DEFAULT_CONFIG["base_url"])
                 try:
-                    language_text = prompt_text(self.driver, timeout=float(cfg.get("prompt_timeout_s") or 8))
-                except Exception as exc:
-                    self.set_status(f"Kein Tipptext: {exc}")
-                    time.sleep(1.0)
+                    language_text = prompt_text(self.driver, timeout=min(3.0, float(cfg.get("prompt_timeout_s") or 8)))
+                except Exception:
+                    self.set_status("Kein Tipptext — öffne Schreiben / Lektion…")
+                    foreground_browser(self.driver)
+                    arm_lesson(self.driver, base)
+                    time.sleep(0.6)
                     continue
                 if self.root:
                     self.root.after(0, lambda t=language_text: self.preview.config(text=t))
-                focus_typer(self.driver)
-                for ch in glyphs_to_type(language_text):
-                    if self.stop_flag.is_set():
-                        break
-                    type_char(self.driver, ch)
-                    time.sleep(interval_seconds(cfg))
+                ch = first_remaining_glyph(language_text)
+                used = send_glyph_verified(self.driver, ch, language_text)
+                if used:
+                    stalls = 0
+                    left = remaining_prompt_now(self.driver)
+                    n = len(left) if left is not None else max(0, len(language_text) - 1)
+                    show = "␣" if ch == " " else ch
+                    self.set_status(f"Tippt »{show}« per {used} · noch {n} Zeichen")
+                else:
+                    stalls += 1
+                    foreground_browser(self.driver)
+                    arm_lesson(self.driver, base)
+                    focus_typer(self.driver)
+                    remember_send(None)
+                    if stalls == 1:
+                        self.set_status("Tasten kommen nicht an — Browser-Fenster in den Vordergrund…")
+                    elif stalls >= 3:
+                        self.set_status("Schreibmodus aktiv, aber die Lektion nimmt keine Tasten. Lektion im Browser starten, dann TypeHack nicht anklicken.")
+                if self.stop_flag.is_set():
+                    break
+                time.sleep(interval_seconds(cfg))
         except Exception as exc:
             self.set_status(f"Fehler: {exc}")
             print(f"An error occurred: {exc}")
         finally:
             self.typing = False
+            self._apply_topmost()
             if self.root:
                 self.root.after(0, lambda: self.start_button.config(text="Start Typing"))
                 self.set_badge("●  verbunden" if self.connected else "●  getrennt")

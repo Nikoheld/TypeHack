@@ -5,6 +5,8 @@ __pycache__/
 .venv/
 venv/
 *.log
+debug_typing.py
+debug_typing.log
 msedgedriver.exe
 chromedriver.exe
 .DS_Store

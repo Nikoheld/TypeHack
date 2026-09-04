@@ -237,7 +237,36 @@ class GlyphSendTests(unittest.TestCase):
         self.assertIn(" ", sent)
         self.assertIn("ö", sent)
 
-    def test_type_char_send_keys_the_glyph_not_cdp(self):
+    def test_first_remaining_glyph_is_next_key(self):
+        remaining = th.extract_prompt_from_html(
+            '<div id="text_todo_1"><span>l</span><span></span><span>ö</span></div>'
+        )
+        self.assertEqual(th.first_remaining_glyph(remaining), "l")
+        self.assertEqual(th.first_remaining_glyph(" ö"), " ")
+        self.assertEqual(th.first_remaining_glyph("ö"), "ö")
+
+    def test_os_space_uses_virtual_key_32(self):
+        from unittest import mock
+
+        with mock.patch.object(th, "_vk_tap") as vk:
+            th.os_send_glyph(" ")
+            th.os_send_glyph("\xa0")
+        vk.assert_has_calls([mock.call(32), mock.call(32)])
+        self.assertEqual(vk.call_count, 2)
+
+    def test_os_letter_uses_vkkeyscan_shift(self):
+        from unittest import mock
+
+        with mock.patch.object(th, "_vk_tap") as vk:
+            with mock.patch.object(th, "_vk_down") as down:
+                with mock.patch.object(th, "_vk_up") as up:
+                    with mock.patch.object(th.ctypes.windll.user32, "VkKeyScanW", return_value=0x141):
+                        th.os_send_glyph("A")
+        vk.assert_called_once_with(0x41)
+        down.assert_called_with(0x10)
+        up.assert_called_with(0x10)
+
+    def test_type_char_uses_os_then_js_cdp_chains(self):
         import inspect
         from unittest import mock
 
@@ -254,39 +283,93 @@ class GlyphSendTests(unittest.TestCase):
                 return Box()
 
             def execute_cdp_cmd(self, *_a, **_k):
-                raise AssertionError("CDP must not be the primary send")
+                raise AssertionError("CDP is fallback only")
 
-        sent = []
+            def execute_script(self, *_a, **_k):
+                raise AssertionError("JS is fallback only")
 
-        class FakeChains:
-            def __init__(self, driver):
-                self.driver = driver
-
-            def send_keys(self, glyph):
-                sent.append(glyph)
-                return self
-
-            def perform(self):
-                return None
-
-        driver = Driver()
         remaining = th.extract_prompt_from_html(
             '<div id="text_todo_1"><span>l</span><span></span><span>ö</span></div>'
         )
-        with mock.patch("selenium.webdriver.common.action_chains.ActionChains", FakeChains):
+        sent = []
+        th.remember_send(None)
+        with mock.patch.object(th, "os_send_glyph", side_effect=lambda ch: sent.append(ch)):
             for ch in th.glyphs_to_type(remaining):
-                th.type_char(driver, ch)
+                th.type_char(Driver(), ch)
         self.assertEqual(sent, ["l", " ", "ö"])
         src = inspect.getsource(th.type_char)
         self.assertIn("send_glyph", src)
         send_src = inspect.getsource(th.send_glyph)
-        self.assertIn("ActionChains", send_src)
-        self.assertIn("send_keys", send_src)
-        self.assertNotIn("execute_cdp_cmd", send_src)
-        self.assertNotIn("return", send_src.split("box.send_keys")[-1] if "box.send_keys" in send_src else send_src)
+        self.assertIn("_dispatch_glyph", send_src)
+        dispatch_src = inspect.getsource(th._dispatch_glyph)
+        self.assertIn("os_send_glyph", dispatch_src)
+        self.assertIn("js_send_glyph", dispatch_src)
+        self.assertIn("cdp_send_glyph", dispatch_src)
+        self.assertEqual(th.SEND_METHODS[0], "os")
+        self.assertIn("js", th.SEND_METHODS)
+        self.assertIn("cdp", th.SEND_METHODS)
         typing_src = inspect.getsource(th.TypeHackApp.start_typing)
-        self.assertIn("glyphs_to_type", typing_src)
-        self.assertIn("type_char", typing_src)
+        self.assertIn("first_remaining_glyph", typing_src)
+        self.assertIn("send_glyph_verified", typing_src)
+        self.assertIn("arm_lesson", typing_src)
+        self.assertIn("foreground_browser", typing_src)
+
+    def test_verified_send_tries_next_method_if_prompt_unchanged(self):
+        from unittest import mock
+
+        htmls = [
+            '<div id="text_todo_1"><span>l</span><span></span><span>ö</span></div>',
+            '<div id="text_todo_1"><span></span><span>ö</span></div>',
+        ]
+
+        class Driver:
+            def find_element(self, by, value):
+                raise Exception("no box")
+
+        th.remember_send(None)
+        with mock.patch.object(th, "collect_prompt_html", side_effect=lambda _d: [htmls.pop(0)]):
+            with mock.patch.object(th, "os_send_glyph"):
+                with mock.patch.object(th, "js_send_glyph") as js:
+                    used = th.send_glyph_verified(Driver(), "l", "l ö", settle_s=0)
+        self.assertEqual(used, "js")
+        js.assert_called_once()
+        self.assertEqual(th.preferred_send(), "js")
+
+    def test_arm_lesson_clicks_start_dialog(self):
+        clicked = []
+
+        class El:
+            def __init__(self, shown=True):
+                self._shown = shown
+                self.text = "OK"
+
+            def is_displayed(self):
+                return self._shown
+
+            def get_attribute(self, name):
+                return ""
+
+            def click(self):
+                clicked.append("ok")
+
+        class Driver:
+            def find_elements(self, by, value):
+                if value == ".ui-dialog-buttonset button":
+                    return [El()]
+                return []
+
+            def execute_script(self, *_a, **_k):
+                return None
+
+        from unittest import mock
+
+        with mock.patch.object(th, "os_send_glyph") as os_send:
+            self.assertTrue(th.arm_lesson(Driver()))
+        self.assertEqual(clicked, ["ok"])
+        os_send.assert_called_with("\n")
+        ids = [value for _by, value in th.START_CLICK]
+        self.assertTrue(any("ui-dialog-buttonset" in str(v) for v in ids))
+        self.assertTrue(any("cockpitStartButton" in str(v) for v in ids))
 
 
 class CaptchaReloadTests(unittest.TestCase):
