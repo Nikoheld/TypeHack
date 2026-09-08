@@ -1,4 +1,4 @@
-# TypeHack 3.1.0
+# TypeHack 3.1.1
 
 Native **Rust** helper for [typewriter.at](https://www.typewriter.at) (public instance `at4.typewriter.at`).
 
@@ -20,7 +20,7 @@ Settings: `%LOCALAPPDATA%\TypeHack\config.json`, login: `credentials.json` (giti
 ## What 3.1 does
 
 - Remaining prompt from `#text_todo_1` (empty span = space, skip done spans, umlauts, `*`).
-- Space = virtual key **32**. y/z/ö are characters, not KeyY/KeyZ.
+- Space = virtual key **32**. y/z/ö/ÄÖÜ/ß are the real characters (Swiss Caps Lock for uppercase umlauts).
 - Pace = Anschläge / 10 Minuten (200–8000, **2000 → 0.3 s**). Changing the number **turns MAX Speed off**.
 - **MAX Speed** dumps the whole remaining line with OS keys (≥ 100000 Anschläge / 10 min).
 - After login stays on `user/overview`. Does **not** open `generateLevel`.

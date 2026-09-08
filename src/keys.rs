@@ -38,21 +38,80 @@ pub fn key_plan_for_glyph(ch: char) -> KeyPlan {
     })
 }
 
+/// Swiss QWERTZ: Shift+ö = é, not Ö. Caps Lock + ö = Ö.
+pub fn umlaut_lower(ch: char) -> Option<char> {
+    match ch {
+        'Ä' | 'ä' => Some('ä'),
+        'Ö' | 'ö' => Some('ö'),
+        'Ü' | 'ü' => Some('ü'),
+        'Ë' | 'ë' => Some('ë'),
+        'Ï' | 'ï' => Some('ï'),
+        'Ÿ' | 'ÿ' => Some('ÿ'),
+        _ => None,
+    }
+}
+
+pub fn umlaut_ascii_base(ch: char) -> Option<char> {
+    match ch {
+        'Ä' => Some('A'),
+        'ä' => Some('a'),
+        'Ö' => Some('O'),
+        'ö' => Some('o'),
+        'Ü' => Some('U'),
+        'ü' => Some('u'),
+        'Ë' => Some('E'),
+        'ë' => Some('e'),
+        'Ï' => Some('I'),
+        'ï' => Some('i'),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn scan_to_plan(scan: i16) -> Option<KeyPlan> {
+    if scan == -1 || scan as u16 == 0xFFFF {
+        return None;
+    }
+    let raw = scan as u16;
+    let vk = raw & 0xFF;
+    if vk == 0 {
+        return None;
+    }
+    Some(KeyPlan {
+        vk,
+        shift: raw & 0x100 != 0,
+        ctrl: raw & 0x200 != 0,
+        alt: raw & 0x400 != 0,
+    })
+}
+
+#[cfg(windows)]
+fn foreground_hkl() -> Option<windows::Win32::UI::Input::KeyboardAndMouse::HKL> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayout;
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        let mut pid = 0u32;
+        let tid = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        let hkl = GetKeyboardLayout(tid);
+        if hkl.0.is_null() {
+            None
+        } else {
+            Some(hkl)
+        }
+    }
+}
+
 #[cfg(windows)]
 fn layout_plan(ch: char) -> Option<KeyPlan> {
-    use windows::Win32::UI::Input::KeyboardAndMouse::VkKeyScanW;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VkKeyScanExW, VkKeyScanW};
     unsafe {
-        let scan = VkKeyScanW(ch as u16);
-        if scan == -1 || scan as u16 == 0xFFFF {
-            return None;
+        if let Some(hkl) = foreground_hkl() {
+            if let Some(plan) = scan_to_plan(VkKeyScanExW(ch as u16, hkl)) {
+                return Some(plan);
+            }
         }
-        let raw = scan as u16;
-        Some(KeyPlan {
-            vk: raw & 0xFF,
-            shift: raw & 0x100 != 0,
-            ctrl: raw & 0x200 != 0,
-            alt: raw & 0x400 != 0,
-        })
+        scan_to_plan(VkKeyScanW(ch as u16))
     }
 }
 
@@ -61,15 +120,16 @@ fn layout_plan(_ch: char) -> Option<KeyPlan> {
     None
 }
 
-/// Fire the whole remaining line in one OS burst. No Selenium between keys.
-/// Sequential `keybd_event` is the fallback; a single `SendInput` array is the fast path.
+/// Fire the remaining line. Non-ASCII (ÄÖÜ) goes one OS key at a time so Swiss
+/// Caps-Lock umlauts are not turned into é/è/à by a held Shift.
 pub fn send_glyphs(chars: &[char]) -> Result<(), String> {
     if chars.is_empty() {
         return Ok(());
     }
     #[cfg(windows)]
     {
-        if send_glyphs_batch(chars).is_ok() {
+        let ascii_only = chars.iter().all(|c| c.is_ascii() && (!c.is_ascii_control() || *c == '\n'));
+        if ascii_only && send_glyphs_batch(chars).is_ok() {
             return Ok(());
         }
         for &ch in chars {
@@ -84,35 +144,117 @@ pub fn send_glyphs(chars: &[char]) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-pub fn send_glyph(ch: char) -> Result<(), String> {
-    let plan = key_plan_for_glyph(ch);
-    if plan.vk == 0 {
-        return unicode_tap(crate::prompt::keys_for_char(ch));
-    }
+fn vk_down(vk: u16) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{keybd_event, MapVirtualKeyW, MAPVK_VK_TO_VSC};
     unsafe {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP};
-        if plan.shift {
-            keybd_event(SHIFT_VIRTUAL_KEY as u8, 0, Default::default(), 0);
+        let scan = MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) as u8;
+        keybd_event(vk as u8, scan, Default::default(), 0);
+    }
+}
+
+#[cfg(windows)]
+fn vk_up(vk: u16) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{keybd_event, MapVirtualKeyW, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC};
+    unsafe {
+        let scan = MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) as u8;
+        keybd_event(vk as u8, scan, KEYEVENTF_KEYUP, 0);
+    }
+}
+
+#[cfg(windows)]
+fn vk_tap(vk: u16) {
+    vk_down(vk);
+    vk_up(vk);
+}
+
+#[cfg(windows)]
+fn tap_plan(plan: KeyPlan) {
+    if plan.shift {
+        vk_down(SHIFT_VIRTUAL_KEY);
+    }
+    if plan.ctrl {
+        vk_down(0x11);
+    }
+    if plan.alt {
+        vk_down(0x12);
+    }
+    vk_tap(plan.vk);
+    if plan.alt {
+        vk_up(0x12);
+    }
+    if plan.ctrl {
+        vk_up(0x11);
+    }
+    if plan.shift {
+        vk_up(SHIFT_VIRTUAL_KEY);
+    }
+}
+
+#[cfg(windows)]
+fn caps_lock_on() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
+    unsafe { GetKeyState(0x14) as u16 & 1 == 1 }
+}
+
+#[cfg(windows)]
+fn tap_caps() {
+    vk_tap(0x14);
+}
+
+/// Swiss layout: uppercase ÄÖÜ need Caps Lock, not Shift (Shift+ö = é).
+#[cfg(windows)]
+fn tap_with_caps_if_needed(vk: u16, want_caps: bool) {
+    let was = caps_lock_on();
+    if want_caps != was {
+        tap_caps();
+    }
+    vk_tap(vk);
+    if want_caps != was {
+        tap_caps();
+    }
+}
+
+#[cfg(windows)]
+pub fn send_glyph(ch: char) -> Result<(), String> {
+    let glyph = crate::prompt::keys_for_char(ch);
+    if glyph == ' ' {
+        vk_tap(SPACE_VIRTUAL_KEY);
+        return Ok(());
+    }
+    if glyph == '\n' {
+        vk_tap(ENTER_VIRTUAL_KEY);
+        return Ok(());
+    }
+    if let Some(plan) = layout_plan(glyph) {
+        if let Some(lower) = umlaut_lower(glyph) {
+            if glyph != lower {
+                if let Some(lp) = layout_plan(lower) {
+                    if plan.vk == lp.vk && plan.shift == lp.shift && !plan.shift {
+                        tap_with_caps_if_needed(plan.vk, true);
+                        return Ok(());
+                    }
+                }
+            }
         }
-        if plan.ctrl {
-            keybd_event(0x11, 0, Default::default(), 0);
-        }
-        if plan.alt {
-            keybd_event(0x12, 0, Default::default(), 0);
-        }
-        keybd_event(plan.vk as u8, 0, Default::default(), 0);
-        keybd_event(plan.vk as u8, 0, KEYEVENTF_KEYUP, 0);
-        if plan.alt {
-            keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0);
-        }
-        if plan.ctrl {
-            keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0);
-        }
-        if plan.shift {
-            keybd_event(SHIFT_VIRTUAL_KEY as u8, 0, KEYEVENTF_KEYUP, 0);
+        tap_plan(plan);
+        return Ok(());
+    }
+    if let Some(lower) = umlaut_lower(glyph) {
+        if let Some(plan) = layout_plan(lower) {
+            tap_with_caps_if_needed(plan.vk, glyph != lower);
+            return Ok(());
         }
     }
-    Ok(())
+    if let Some(base) = umlaut_ascii_base(glyph) {
+        if let Some(dead) = layout_plan('\u{00A8}') {
+            tap_plan(dead);
+            if let Some(letter) = layout_plan(base) {
+                tap_plan(letter);
+                return Ok(());
+            }
+        }
+    }
+    unicode_tap(glyph)
 }
 
 #[cfg(not(windows))]

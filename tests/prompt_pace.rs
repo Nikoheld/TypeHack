@@ -49,9 +49,9 @@ const TODO_AFTER_DONE_PARENT: &str = concat!(
 );
 
 #[test]
-fn version_is_3_1_0() {
-    assert_eq!(VERSION, "3.1.0");
-    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.0");
+fn version_is_3_1_1() {
+    assert_eq!(VERSION, "3.1.1");
+    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.1");
 }
 
 #[test]
@@ -295,6 +295,31 @@ fn keys_for_char_spaces_and_letters() {
     assert_eq!(keys_for_char('\u{00a0}'), ' ');
     assert_eq!(keys_for_char('a'), 'a');
     assert_eq!(normalize_prompt_text("a\u{00a0}b"), "a b");
+}
+
+#[test]
+fn umlauts_stay_umlauts() {
+    for ch in ['Ä', 'Ö', 'Ü', 'ä', 'ö', 'ü', 'ß', 'é', 'è', 'à'] {
+        assert_eq!(keys_for_char(ch), ch);
+        assert_eq!(glyphs_to_type(&ch.to_string()), vec![ch]);
+        assert_eq!(first_remaining_glyph(&ch.to_string()).unwrap(), ch);
+    }
+    assert_eq!(umlaut_lower('Ö'), Some('ö'));
+    assert_eq!(umlaut_lower('Ä'), Some('ä'));
+    assert_eq!(umlaut_lower('Ü'), Some('ü'));
+    assert_eq!(umlaut_ascii_base('Ö'), Some('O'));
+    assert_eq!(umlaut_ascii_base('ä'), Some('a'));
+}
+
+#[test]
+fn html_named_umlaut_entities() {
+    let html = concat!(
+        r#"<div id="text_todo_1">"#,
+        r#"<span>&Ouml;</span><span>&auml;</span><span>&uuml;</span><span>&szlig;</span>"#,
+        "</div>",
+    );
+    assert_eq!(extract_prompt_from_html(html), "Öäüß");
+    assert_eq!(glyphs_to_type("Öäüß"), vec!['Ö', 'ä', 'ü', 'ß']);
 }
 
 #[test]
