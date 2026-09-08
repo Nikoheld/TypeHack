@@ -431,6 +431,9 @@ impl App {
                     return;
                 };
                 let _ = session.arm_and_focus(&base).await;
+                if let Ok(mut g) = live.lock() {
+                    g.status = "Start-Dialog zu — tippt die Lektion.".into();
+                }
                 let mut t0 = std::time::Instant::now();
                 let mut sent: u64 = 0;
                 let mut prev_max = live_max.load(Ordering::SeqCst);
@@ -464,15 +467,15 @@ impl App {
                                     g.badge = "tippt".into();
                                 }
                             }
-                            Err(e) => {
+                            Err(_) => {
                                 if stop.load(Ordering::SeqCst) {
                                     break;
                                 }
                                 if let Ok(mut g) = live.lock() {
-                                    g.status = format!("Kein Tipptext — {e}");
+                                    g.status = "Warte auf Lektion (Start-Dialog / Restzeile)…".into();
                                 }
                                 let _ = session.arm_and_focus(&base).await;
-                                tokio::time::sleep(Duration::from_millis(40)).await;
+                                tokio::time::sleep(Duration::from_millis(80)).await;
                             }
                         }
                         continue;
@@ -500,15 +503,15 @@ impl App {
                                 g.badge = "tippt".into();
                             }
                         }
-                        Err(e) => {
+                        Err(_) => {
                             if stop.load(Ordering::SeqCst) {
                                 break;
                             }
                             if let Ok(mut g) = live.lock() {
-                                g.status = format!("Kein Tipptext — {e}");
+                                g.status = "Warte auf Lektion (Start-Dialog / Restzeile)…".into();
                             }
                             let _ = session.arm_and_focus(&base).await;
-                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            tokio::time::sleep(Duration::from_millis(120)).await;
                         }
                     }
                 }

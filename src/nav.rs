@@ -39,3 +39,13 @@ pub fn is_achievement_click_target(text_or_href: &str) -> bool {
     let t = text_or_href.to_ascii_lowercase();
     t.contains("abzeichen") || t.contains("achievement") || t.contains("badge")
 }
+
+pub fn is_start_button(text: &str) -> bool {
+    let t = text.trim().to_ascii_lowercase();
+    t == "ok"
+        || t == "start"
+        || t.contains("starten")
+        || t.contains("weiter")
+        || t.contains("los")
+        || (t.contains("start") && !t.contains("stop"))
+}

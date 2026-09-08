@@ -1,8 +1,8 @@
 //! Single source of truth for the shipped TypeHack version.
 
-pub const VERSION: &str = "3.1.2";
+pub const VERSION: &str = "3.1.3";
 pub const APP_NAME: &str = "TypeHack";
-pub const WINDOW_TITLE: &str = "TypeHack 3.1.2";
+pub const WINDOW_TITLE: &str = "TypeHack 3.1.3";
 pub const REPO: &str = "Nikoheld/TypeHack";
 
 /// `v3.1.0` / `3.1.0-beta` → `[3, 1, 0]`.

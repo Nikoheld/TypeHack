@@ -7,10 +7,12 @@ use std::time::{Duration, Instant};
 
 use thirtyfour::prelude::*;
 
-use typehack::keys::{force_foreground_typewriter, send_glyph, send_glyphs};
+use typehack::keys::{
+    ensure_caps_off, force_foreground_typewriter, release_modifiers, send_glyph, send_glyphs, send_start_key,
+};
 use typehack::nav::{
-    is_achievement_click_target, is_achievement_dialog, is_captcha_view, is_dashboard_url, is_start_dialog,
-    OVERVIEW_PATH,
+    is_achievement_click_target, is_achievement_dialog, is_captcha_view, is_dashboard_url, is_start_button,
+    is_start_dialog, OVERVIEW_PATH,
 };
 use typehack::prompt::{first_remaining_glyph, pick_remaining_prompt, PROMPT_SELECTORS};
 
@@ -136,7 +138,9 @@ impl BrowserSession {
     pub async fn arm_and_focus(&self, _base: &str) -> Result<(), String> {
         // Stay on the page the user opened. Do not jump to generateLevel.
         close_achievement_dialogs(&self.driver).await;
-        click_lesson_start(&self.driver).await;
+        dismiss_start_dialog(&self.driver).await;
+        release_modifiers();
+        ensure_caps_off();
         focus_typer(&self.driver).await;
         force_foreground_typewriter();
         Ok(())
@@ -380,31 +384,94 @@ async fn stay_on_dashboard(driver: &WebDriver, base: &str) {
     }
 }
 
+const START_DIALOG_JS: &str = r#"
+(function(){
+  var nodes = document.querySelectorAll('.ui-dialog, .modal, [role="dialog"]');
+  for (var i=0;i<nodes.length;i++){
+    var el = nodes[i];
+    var st = window.getComputedStyle(el);
+    if (st.display==='none' || st.visibility==='hidden') continue;
+    var s = (el.innerText||'').toLowerCase();
+    if (s.indexOf('abzeichen')>=0) continue;
+    if (s.indexOf('beliebige taste')>=0 || s.indexOf('zum starten')>=0 || (s.indexOf('taste')>=0 && s.indexOf('start')>=0)) return true;
+  }
+  return false;
+})()
+"#;
+
+async fn start_dialog_open(driver: &WebDriver) -> bool {
+    if let Ok(ret) = driver.execute(START_DIALOG_JS, vec![]).await {
+        if ret.json().as_bool() == Some(true) {
+            return true;
+        }
+    }
+    let Ok(dialogs) = driver.find_all(By::Css(".ui-dialog")).await else {
+        return false;
+    };
+    for dlg in dialogs {
+        if !dlg.is_displayed().await.unwrap_or(false) {
+            continue;
+        }
+        let text = dlg.text().await.unwrap_or_default();
+        if is_start_dialog(&text) {
+            return true;
+        }
+    }
+    false
+}
+
 async fn click_lesson_start(driver: &WebDriver) {
     close_achievement_dialogs(driver).await;
-    if let Ok(dialogs) = driver.find_all(By::Css(".ui-dialog")).await {
-        for dlg in dialogs {
-            let text = dlg.text().await.unwrap_or_default();
-            if is_achievement_dialog(&text) {
-                continue;
-            }
-            if !is_start_dialog(&text) {
-                continue;
-            }
-            if let Ok(btns) = dlg.find_all(By::Css("button")).await {
-                for btn in btns {
-                    let bt = btn.text().await.unwrap_or_default();
-                    if is_achievement_click_target(&bt) {
-                        continue;
-                    }
-                    if btn.is_displayed().await.unwrap_or(false) {
-                        let _ = btn.click().await;
-                        return;
-                    }
+    let Ok(dialogs) = driver.find_all(By::Css(".ui-dialog")).await else {
+        return;
+    };
+    for dlg in dialogs {
+        let text = dlg.text().await.unwrap_or_default();
+        if is_achievement_dialog(&text) || !is_start_dialog(&text) {
+            continue;
+        }
+        if let Ok(btns) = dlg.find_all(By::Css("button")).await {
+            let mut fallback = None;
+            for btn in btns {
+                let bt = btn.text().await.unwrap_or_default();
+                if is_achievement_click_target(&bt) {
+                    continue;
                 }
+                if !btn.is_displayed().await.unwrap_or(false) {
+                    continue;
+                }
+                if is_start_button(&bt) {
+                    let _ = btn.click().await;
+                    return;
+                }
+                fallback = Some(btn);
+            }
+            if let Some(btn) = fallback {
+                let _ = btn.click().await;
             }
         }
     }
+}
+
+/// The start overlay eats the first lesson key → always a mistake at the beginning.
+/// Dismiss it with Enter, then wait until it is gone.
+async fn dismiss_start_dialog(driver: &WebDriver) {
+    close_achievement_dialogs(driver).await;
+    if !start_dialog_open(driver).await {
+        return;
+    }
+    click_lesson_start(driver).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    if start_dialog_open(driver).await {
+        force_foreground_typewriter();
+        focus_typer(driver).await;
+        let _ = send_start_key();
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline && start_dialog_open(driver).await {
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(120)).await;
 }
 
 

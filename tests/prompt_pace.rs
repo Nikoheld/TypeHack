@@ -49,9 +49,9 @@ const TODO_AFTER_DONE_PARENT: &str = concat!(
 );
 
 #[test]
-fn version_is_3_1_2() {
-    assert_eq!(VERSION, "3.1.2");
-    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.2");
+fn version_is_3_1_3() {
+    assert_eq!(VERSION, "3.1.3");
+    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.3");
 }
 
 #[test]
@@ -140,6 +140,16 @@ fn achievement_card_is_not_the_start_dialog() {
         "Achtung! Fertig! ...\nDrücke eine beliebige Taste zum Starten\nStart"
     ));
     assert!(!is_start_dialog("Pause\nDer Schreibmodus wurde pausiert!"));
+    assert!(is_start_button("Start"));
+    assert!(is_start_button("OK"));
+    assert!(!is_start_button("Abzeichen"));
+}
+
+#[test]
+fn edge_driver_major_must_match() {
+    use typehack::driver::same_edge_major;
+    assert!(same_edge_major("152.0.4191.62", "152.0.4191.53"));
+    assert!(!same_edge_major("153.0.1.0", "152.0.4191.62"));
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::install::install_dir;
 use crate::update::{http_get_bytes, http_get_text};
@@ -167,6 +167,38 @@ fn download_matching(dest: &Path) -> Result<(), String> {
     Err(last)
 }
 
+pub fn driver_file_version(path: &Path) -> Option<String> {
+    let mut cmd = Command::new(path);
+    cmd.arg("--version").stdin(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let out = cmd.output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split_whitespace()
+        .find(|p| looks_like_version(p))
+        .map(|s| s.trim_end_matches(',').to_string())
+}
+
+pub fn same_edge_major(edge: &str, driver: &str) -> bool {
+    let e = crate::version::parse_version(edge);
+    let d = crate::version::parse_version(driver);
+    match (e.first(), d.first()) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn driver_matches_edge(path: &Path) -> bool {
+    match (edge_version(), driver_file_version(path)) {
+        (Some(ev), Some(dv)) => same_edge_major(&ev, &dv),
+        (_, Some(_)) => true,
+        _ => path.is_file(),
+    }
+}
+
 /// Find or download msedgedriver into `%LOCALAPPDATA%\TypeHack\driver`.
 pub fn ensure_msedgedriver() -> Result<PathBuf, String> {
     if edge_binary().is_none() {
@@ -175,17 +207,19 @@ pub fn ensure_msedgedriver() -> Result<PathBuf, String> {
         );
     }
     let dest = driver_path();
-    if dest.is_file() {
+    if dest.is_file() && driver_matches_edge(&dest) {
         return Ok(dest);
     }
     if let Some(found) = find_existing() {
-        if found != dest {
-            let _ = fs::create_dir_all(driver_dir());
-            if fs::copy(&found, &dest).is_ok() {
-                return Ok(dest);
+        if driver_matches_edge(&found) {
+            if found != dest {
+                let _ = fs::create_dir_all(driver_dir());
+                if fs::copy(&found, &dest).is_ok() && driver_matches_edge(&dest) {
+                    return Ok(dest);
+                }
             }
+            return Ok(found);
         }
-        return Ok(found);
     }
     download_matching(&dest)?;
     if dest.is_file() {

@@ -10,3 +10,4 @@
 8. **3.0.1** tippte weiter im Burst, wenn MAX Speed noch an war oder ein alter Schreib-Loop lief. **3.0.2**: 2000 wählen schaltet MAX aus; der Takt gilt sofort.
 9. **3.1.0** installiert sich nach `%LOCALAPPDATA%\TypeHack`, lädt `msedgedriver` passend zu Edge und aktualisiert im Hintergrund von GitHub. Ohne Microsoft Edge geht Verbinden nicht.
 10. **3.1.0** tippte ÄÖÜ auf Schweizer Tastatur falsch (Umschalt+ö = é). **3.1.1** nutzt die Layout-Taste der Vordergrund-App und Caps Lock für Groß-Umlaute.
+11. **Erster Anschlag immer falsch:** der Start-Dialog „beliebige Taste“ frisst die erste Taste. **3.1.3** schließt den Dialog mit Enter, bevor die Lektion getippt wird.

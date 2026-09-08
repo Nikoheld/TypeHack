@@ -201,6 +201,29 @@ fn tap_caps() {
     vk_tap(0x14);
 }
 
+pub fn ensure_caps_off() {
+    #[cfg(windows)]
+    if caps_lock_on() {
+        tap_caps();
+    }
+}
+
+pub fn release_modifiers() {
+    #[cfg(windows)]
+    {
+        vk_up(SHIFT_VIRTUAL_KEY);
+        vk_up(0x11);
+        vk_up(0x12);
+        vk_up(0xA4);
+        vk_up(0xA5);
+    }
+}
+
+/// Dismiss typewriter.at "beliebige Taste" without typing a lesson letter.
+pub fn send_start_key() -> Result<(), String> {
+    send_glyph('\n')
+}
+
 /// Swiss layout: uppercase ÄÖÜ need Caps Lock, not Shift (Shift+ö = é).
 #[cfg(windows)]
 fn tap_with_caps_if_needed(vk: u16, want_caps: bool) {
