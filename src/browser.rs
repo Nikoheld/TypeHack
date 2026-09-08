@@ -95,32 +95,13 @@ if (!el || el === document.body || el === document.documentElement) {
     try { e.focus({preventScroll: true}); el = e; break; } catch (x) {}
   }
 }
-try {
-  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
-    el.focus();
-    try { document.execCommand('insertText', false, key); } catch (x) {}
-    try {
-      el.dispatchEvent(new InputEvent('beforeinput', {bubbles: true, cancelable: true, inputType: 'insertText', data: key}));
-      el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: key}));
-    } catch (x) {
-      el.dispatchEvent(new Event('input', {bubbles: true}));
-    }
-  }
-} catch (x) {}
-var nodes = [el, document.getElementById('text_todo_1'), document.body, document];
-var seen = [];
-nodes.forEach(function(n) {
-  if (!n || seen.indexOf(n) >= 0) return;
-  seen.push(n);
-  fire(n, 'keydown'); fire(n, 'keypress'); fire(n, 'keyup');
-});
-if (window.jQuery) {
+var target = el || document.getElementById('text_todo_1') || document;
+fire(target, 'keydown'); fire(target, 'keypress'); fire(target, 'keyup');
+if (window.jQuery && target) {
   ['keydown','keypress','keyup'].forEach(function(type) {
     var je = jQuery.Event(type);
     je.which = which; je.keyCode = which; je.charCode = which; je.key = key;
-    jQuery(document).trigger(je);
-    jQuery('body').trigger(je);
-    jQuery('#text_todo_1').trigger(je);
+    jQuery(target).trigger(je);
   });
 }
 return true;
@@ -243,7 +224,8 @@ impl BrowserSession {
         {
             let last = self.last_burst.lock().unwrap_or_else(|e| e.into_inner());
             if let Some((text, t0)) = last.as_ref() {
-                if text == &before && t0.elapsed() < Duration::from_millis(80) {
+                // Page needs time to eat the burst. Retyping the same line = mass errors.
+                if text == &before && t0.elapsed() < Duration::from_millis(250) {
                     return Ok((0, before.clone(), before.chars().count()));
                 }
             }
@@ -252,14 +234,13 @@ impl BrowserSession {
         if let Ok(mut last) = self.last_burst.lock() {
             *last = Some((before.clone(), Instant::now()));
         }
-        tokio::time::sleep(Duration::from_millis((2 + glyphs.len() / 8).min(20) as u64)).await;
-        let mut now = remaining_now(&self.driver).await.unwrap_or_default();
-        // OS keys miss ß, dead keys, AltGr on some layouts — finish leftovers via JS/CDP.
-        let leftover = typehack::glyphs_to_type(&now);
-        if !leftover.is_empty() && leftover.len() <= glyphs.len() {
-            for ch in leftover {
-                now = self.deliver_glyph(ch, &now).await.unwrap_or(now);
-                if now.is_empty() {
+        let deadline = Instant::now() + Duration::from_millis(200);
+        let mut now = before.clone();
+        while Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(12)).await;
+            if let Some(got) = remaining_now(&self.driver).await {
+                now = got;
+                if now != before {
                     break;
                 }
             }
@@ -270,18 +251,17 @@ impl BrowserSession {
 
     async fn deliver_glyph(&self, ch: char, before: &str) -> Result<String, String> {
         send_glyph(ch)?;
-        let mut now = remaining_now(&self.driver).await.unwrap_or_else(|| before.to_string());
-        if glyph_was_consumed(before, &now, ch) {
-            return Ok(now);
+        for wait in [12u64, 24] {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+            let now = remaining_now(&self.driver).await.unwrap_or_else(|| before.to_string());
+            if glyph_was_consumed(before, &now, ch) {
+                return Ok(now);
+            }
         }
+        // OS missed (ß / dead key / AltGr). One JS pass only — never JS+CDP+OS together.
         let _ = js_send_glyph(&self.driver, ch).await;
-        now = remaining_now(&self.driver).await.unwrap_or(now);
-        if glyph_was_consumed(before, &now, ch) {
-            return Ok(now);
-        }
-        let _ = cdp_send_glyph(&self.driver, ch).await;
-        now = remaining_now(&self.driver).await.unwrap_or(now);
-        Ok(now)
+        tokio::time::sleep(Duration::from_millis(16)).await;
+        Ok(remaining_now(&self.driver).await.unwrap_or_else(|| before.to_string()))
     }
 
     pub async fn quit(mut self) {
@@ -339,6 +319,7 @@ async fn js_send_glyph(driver: &WebDriver, ch: char) -> Result<(), String> {
         .map_err(|e| format!("js: {e}"))
 }
 
+#[allow(dead_code)]
 async fn cdp_send_glyph(driver: &WebDriver, ch: char) -> Result<(), String> {
     let info = typehack::glyph_payload(ch);
     let dt = ChromeDevTools::new(driver.handle.clone());

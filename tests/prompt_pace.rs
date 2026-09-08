@@ -49,9 +49,9 @@ const TODO_AFTER_DONE_PARENT: &str = concat!(
 );
 
 #[test]
-fn version_is_3_1_4() {
-    assert_eq!(VERSION, "3.1.4");
-    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.4");
+fn version_is_3_1_5() {
+    assert_eq!(VERSION, "3.1.5");
+    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.5");
 }
 
 #[test]
