@@ -49,9 +49,9 @@ const TODO_AFTER_DONE_PARENT: &str = concat!(
 );
 
 #[test]
-fn version_is_3_1_6() {
-    assert_eq!(VERSION, "3.1.6");
-    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.6");
+fn version_is_3_1_7() {
+    assert_eq!(VERSION, "3.1.7");
+    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.7");
 }
 
 #[test]
@@ -140,6 +140,7 @@ fn achievement_card_is_not_the_start_dialog() {
         "Achtung! Fertig! ...\nDrücke eine beliebige Taste zum Starten\nStart"
     ));
     assert!(!is_start_dialog("Pause\nDer Schreibmodus wurde pausiert!"));
+    assert!(!is_start_dialog("Start\nTastatur üben"));
     assert!(is_start_button("Start"));
     assert!(is_start_button("OK"));
     assert!(!is_start_button("Abzeichen"));

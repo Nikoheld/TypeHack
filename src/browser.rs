@@ -111,6 +111,7 @@ pub struct BrowserSession {
     driver: WebDriver,
     child: Option<Child>,
     last_burst: Mutex<Option<(String, Instant)>>,
+    last_dismiss: Mutex<Option<Instant>>,
 }
 
 impl BrowserSession {
@@ -199,9 +200,7 @@ impl BrowserSession {
 
     /// One remaining glyph. Does not sleep for pace — the caller owns the wall-clock schedule.
     pub async fn type_one(&self) -> Result<(char, String, usize), String> {
-        if self.hold_for_start_dialog().await {
-            return Err("Start-Dialog".into());
-        }
+        let _ = self.hold_for_start_dialog().await;
         focus_typer(&self.driver).await;
         let before = remaining_now(&self.driver)
             .await
@@ -217,10 +216,7 @@ impl BrowserSession {
     /// caller waits instead of typing it twice. Retries after 80 ms if keys missed.
     pub async fn type_line_max(&self) -> Result<(usize, String, usize), String> {
         force_foreground_typewriter();
-        if self.hold_for_start_dialog().await {
-            let now = remaining_now(&self.driver).await.unwrap_or_default();
-            return Ok((0, now.clone(), now.chars().count()));
-        }
+        let _ = self.hold_for_start_dialog().await;
         let before = remaining_now(&self.driver)
             .await
             .ok_or_else(|| "Tipptext ist leer".to_string())?;
@@ -230,19 +226,18 @@ impl BrowserSession {
         }
         {
             let last = self.last_burst.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((text, _)) = last.as_ref() {
+            if let Some((text, t0)) = last.as_ref() {
                 if text == &before {
-                    // Already dumped this remaining. Wait until the lesson eats it.
-                    return Ok((0, before.clone(), before.chars().count()));
-                }
-                if !remaining_is_progress(text, &before) {
-                    // New lesson text while Start Typing is still on.
+                    // Wait for the page to consume the burst; retry if it never did.
+                    if t0.elapsed() < Duration::from_millis(450) {
+                        return Ok((0, before.clone(), before.chars().count()));
+                    }
+                } else if !remaining_is_progress(text, &before) {
                     drop(last);
                     let _ = self.hold_for_start_dialog().await;
                     if let Ok(mut g) = self.last_burst.lock() {
                         *g = None;
                     }
-                    return Ok((0, before.clone(), before.chars().count()));
                 }
             }
         }
@@ -280,8 +275,16 @@ impl BrowserSession {
         Ok(remaining_now(&self.driver).await.unwrap_or_else(|| before.to_string()))
     }
 
-    /// If the start overlay is up, close it and skip typing this tick.
+    /// Close the start overlay if it is really visible. After a dismiss, type
+    /// anyway for 1s even if the DOM still looks like a dialog (avoids a stuck loop).
     async fn hold_for_start_dialog(&self) -> bool {
+        if let Ok(g) = self.last_dismiss.lock() {
+            if let Some(t0) = *g {
+                if t0.elapsed() < Duration::from_millis(900) {
+                    return false;
+                }
+            }
+        }
         if !start_dialog_open(&self.driver).await {
             return false;
         }
@@ -289,6 +292,9 @@ impl BrowserSession {
             *g = None;
         }
         dismiss_start_dialog(&self.driver).await;
+        if let Ok(mut g) = self.last_dismiss.lock() {
+            *g = Some(Instant::now());
+        }
         true
     }
 
@@ -329,6 +335,7 @@ async fn launch_on_port(driver_path: &Path, port: u16) -> Result<BrowserSession,
                 driver,
                 child: Some(child),
                 last_burst: Mutex::new(None),
+                last_dismiss: Mutex::new(None),
             })
         }
         Err(e) => {
@@ -539,10 +546,11 @@ const START_DIALOG_JS: &str = r#"
   for (var i=0;i<nodes.length;i++){
     var el = nodes[i];
     var st = window.getComputedStyle(el);
-    if (st.display==='none' || st.visibility==='hidden') continue;
+    if (st.display==='none' || st.visibility==='hidden' || st.opacity==='0') continue;
+    if (el.offsetWidth < 40 || el.offsetHeight < 20) continue;
     var s = (el.innerText||'').toLowerCase();
     if (s.indexOf('abzeichen')>=0) continue;
-    if (s.indexOf('beliebige taste')>=0 || s.indexOf('zum starten')>=0 || (s.indexOf('taste')>=0 && s.indexOf('start')>=0)) return true;
+    if (s.indexOf('beliebige taste')>=0 || s.indexOf('zum starten')>=0 || (s.indexOf('drücke')>=0 && s.indexOf('taste')>=0)) return true;
   }
   return false;
 })()

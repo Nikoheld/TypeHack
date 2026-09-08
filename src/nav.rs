@@ -30,9 +30,9 @@ pub fn is_start_dialog(text: &str) -> bool {
         return false;
     }
     let t = text.to_ascii_lowercase();
-    (t.contains("taste") && t.contains("start"))
+    t.contains("beliebige taste")
         || t.contains("zum starten")
-        || t.contains("beliebige taste")
+        || (t.contains("drücke") && t.contains("taste"))
 }
 
 pub fn is_achievement_click_target(text_or_href: &str) -> bool {
