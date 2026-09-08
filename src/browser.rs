@@ -1,5 +1,6 @@
 //! Edge/Chrome session: login, Schreiben, Start-Dialog, remaining prompt, OS typing.
 
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -61,40 +62,19 @@ pub struct BrowserSession {
 
 impl BrowserSession {
     pub async fn launch(browser: &str) -> Result<Self, String> {
-        let port = 9518u16;
-        let driver_path = typehack::driver::ensure_msedgedriver()?;
-        let mut cmd = Command::new(&driver_path);
-        cmd.arg(format!("--port={port}"))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000);
-        }
-        let child = cmd.spawn().map_err(|e| format!("msedgedriver: {e}"))?;
-        tokio::time::sleep(Duration::from_millis(600)).await;
-
         let _ = browser;
-        let mut caps = DesiredCapabilities::edge();
-        let _ = caps.add_arg("--disable-blink-features=AutomationControlled");
-        let _ = caps.add_arg("--remote-allow-origins=*");
-        let _ = caps.add_arg("--no-first-run");
-        let _ = caps.add_arg("--disable-popup-blocking");
-        if let Some(bin) = typehack::driver::edge_binary() {
-            let _ = caps.set_binary(&bin.to_string_lossy());
+        if typehack::driver::edge_binary().is_none() {
+            return Err("Microsoft Edge fehlt. Bitte Edge installieren: https://www.microsoft.com/edge".into());
         }
-        let url = format!("http://127.0.0.1:{port}");
-        let driver = WebDriver::new(&url, caps)
-            .await
-            .map_err(|e| format!("WebDriver: {e}"))?;
-        let _ = driver.maximize_window().await;
-        Ok(Self {
-            driver,
-            child: Some(child),
-            last_burst: Mutex::new(None),
-        })
+        let driver_path = typehack::driver::ensure_msedgedriver().map_err(|e| format!("Edge-Treiber: {e}"))?;
+        let mut last = "WebDriver startet nicht".to_string();
+        for port in 9518u16..9532 {
+            match launch_on_port(&driver_path, port).await {
+                Ok(session) => return Ok(session),
+                Err(e) => last = e,
+            }
+        }
+        Err(format!("Browser startet nicht ({last}). TypeHack schließen und Verbinden erneut klicken."))
     }
 
     pub async fn login(&self, email: &str, password: &str, base: &str) -> Result<(), String> {
@@ -140,6 +120,11 @@ impl BrowserSession {
         close_achievement_dialogs(&self.driver).await;
         stay_on_dashboard(&self.driver, base).await;
         close_achievement_dialogs(&self.driver).await;
+        if !logged_in(&self.driver).await {
+            return Err(
+                "Login nicht geschafft. Captcha im Edge-Fenster lösen, dann nochmal Verbinden.".into(),
+            );
+        }
         Ok(())
     }
 
@@ -210,6 +195,44 @@ impl BrowserSession {
     }
 }
 
+async fn launch_on_port(driver_path: &Path, port: u16) -> Result<BrowserSession, String> {
+    let mut cmd = Command::new(driver_path);
+    cmd.arg(format!("--port={port}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("msedgedriver: {e}"))?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut caps = DesiredCapabilities::edge();
+    let _ = caps.add_arg("--disable-blink-features=AutomationControlled");
+    let _ = caps.add_arg("--remote-allow-origins=*");
+    let _ = caps.add_arg("--no-first-run");
+    let _ = caps.add_arg("--disable-popup-blocking");
+    if let Some(bin) = typehack::driver::edge_binary() {
+        let _ = caps.set_binary(&bin.to_string_lossy());
+    }
+    let url = format!("http://127.0.0.1:{port}");
+    match WebDriver::new(&url, caps).await {
+        Ok(driver) => {
+            let _ = driver.maximize_window().await;
+            Ok(BrowserSession {
+                driver,
+                child: Some(child),
+                last_burst: Mutex::new(None),
+            })
+        }
+        Err(e) => {
+            let _ = child.kill();
+            Err(format!("WebDriver: {e}"))
+        }
+    }
+}
+
 async fn remaining_now(driver: &WebDriver) -> Option<String> {
     let htmls = collect_html(driver).await.ok()?;
     pick_remaining_prompt(&htmls).ok()
@@ -270,28 +293,34 @@ async fn first_css(driver: &WebDriver, css: &str) -> Option<WebElement> {
     None
 }
 
-async fn logged_in(driver: &WebDriver) -> bool {
-    if first_css(driver, "input[type='password']").await.is_some() {
-        let url = driver.current_url().await.map(|u| u.to_string()).unwrap_or_default();
-        if url.contains("site/login") {
-            return false;
+async fn has_logout(driver: &WebDriver) -> bool {
+    for css in [
+        "a[href*='site/logout']",
+        "a[href*='logout']",
+        "a[href*='site/logout']",
+    ] {
+        if driver.find_all(By::Css(css)).await.map(|v| !v.is_empty()).unwrap_or(false) {
+            return true;
         }
     }
+    false
+}
+
+async fn logged_in(driver: &WebDriver) -> bool {
     let url = driver.current_url().await.map(|u| u.to_string()).unwrap_or_default();
-    if url.contains("site/login") {
+    if url.contains("site/login") || url.contains("/_chal") {
         return false;
     }
-    if url.contains("runLevel") || url.contains("practise") || url.contains("generateLevel") || url.contains("overview") {
-        if url.contains("overview") {
-            return driver.find_all(By::Css("a[href*='site/logout']")).await.map(|v| !v.is_empty()).unwrap_or(false);
-        }
+    if url.contains("runLevel") || url.contains("practise") || url.contains("generateLevel") {
         return true;
     }
-    driver
-        .find_all(By::Css("a[href*='site/logout']"))
-        .await
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
+    if has_logout(driver).await {
+        return true;
+    }
+    if url.contains("overview") || url.contains("r=user/") {
+        return first_css(driver, "input#LoginForm_pw, input[type='password']").await.is_none();
+    }
+    false
 }
 
 async fn dismiss_overlays(driver: &WebDriver) {

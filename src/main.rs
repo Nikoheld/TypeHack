@@ -31,7 +31,7 @@ struct Live {
 impl Default for Live {
     fn default() -> Self {
         Self {
-            status: "Bereit.".into(),
+            status: "Getrennt = noch nicht eingeloggt. Auf Verbinden klicken.".into(),
             remaining: "Verbinden → im Dashboard Lektion wählen → Start Typing.".into(),
             connected: false,
             typing: false,
@@ -96,8 +96,8 @@ impl App {
             match typehack::driver::ensure_msedgedriver() {
                 Ok(_) => {
                     if let Ok(mut g) = live_bg.lock() {
-                        if g.status == "Bereit." {
-                            g.status = "Bereit. Edge-Treiber ist da.".into();
+                        if !g.connected && g.badge == "getrennt" && g.status.contains("Getrennt") {
+                            g.status = "Getrennt = noch nicht eingeloggt. Edge-Treiber ist da — auf Verbinden klicken.".into();
                         }
                     }
                 }
@@ -114,8 +114,8 @@ impl App {
             match typehack::update::background_update_once() {
                 Ok(Some((info, staged))) => {
                     if let Ok(mut g) = live_bg.lock() {
-                        if !g.typing {
-                            g.status = format!("Update {} geladen — wird im Hintergrund installiert.", info.version);
+                        if !g.connected && !g.typing {
+                            g.status = format!("Update {} bereit — gilt beim nächsten Start.", info.version);
                         }
                     }
                     if let Ok(mut p) = pending_bg.lock() {
@@ -177,7 +177,7 @@ impl eframe::App for App {
         self.live_strokes
             .store(clamp_strokes(self.strokes), Ordering::SeqCst);
         let live = self.live.lock().map(|g| g.clone()).unwrap_or_default();
-        if !live.typing && !self.connecting {
+        if !live.typing && !self.connecting && !live.connected {
             if let Ok(mut g) = self.pending_update.lock() {
                 if let Some(path) = g.take() {
                     let exe = typehack::install::installed_exe();
@@ -424,7 +424,9 @@ impl App {
                     loop_on.store(false, Ordering::SeqCst);
                     if let Ok(mut g) = live.lock() {
                         g.typing = false;
-                        g.status = "Zuerst verbinden.".into();
+                        g.connected = false;
+                        g.badge = "getrennt".into();
+                        g.status = "Getrennt — zuerst Verbinden klicken.".into();
                     }
                     return;
                 };
