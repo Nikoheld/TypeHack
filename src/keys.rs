@@ -128,10 +128,6 @@ pub fn send_glyphs(chars: &[char]) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        let ascii_only = chars.iter().all(|c| c.is_ascii() && (!c.is_ascii_control() || *c == '\n'));
-        if ascii_only && send_glyphs_batch(chars).is_ok() {
-            return Ok(());
-        }
         for &ch in chars {
             send_glyph(ch)?;
         }
@@ -169,6 +165,16 @@ fn vk_tap(vk: u16) {
 
 #[cfg(windows)]
 fn tap_plan(plan: KeyPlan) {
+    // AltGr is Ctrl+RightAlt on Windows; left-Alt alone misses @ € [] {} on CH/DE.
+    let altgr = plan.ctrl && plan.alt;
+    if altgr {
+        vk_down(0x11);
+        vk_down(0xA5);
+        vk_tap(plan.vk);
+        vk_up(0xA5);
+        vk_up(0x11);
+        return;
+    }
     if plan.shift {
         vk_down(SHIFT_VIRTUAL_KEY);
     }
@@ -187,6 +193,35 @@ fn tap_plan(plan: KeyPlan) {
     }
     if plan.shift {
         vk_up(SHIFT_VIRTUAL_KEY);
+    }
+}
+
+/// Dead keys (^ ´ ` ¨ ~) produce nothing until the next tap. If the lesson wants
+/// the dead character itself, follow with Space.
+#[cfg(windows)]
+fn plan_is_dead_key(plan: KeyPlan) -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetKeyboardLayout, MapVirtualKeyExW, ToUnicodeEx, MAPVK_VK_TO_VSC,
+    };
+    unsafe {
+        let hkl = foreground_hkl().unwrap_or_else(|| GetKeyboardLayout(0));
+        let mut state = [0u8; 256];
+        if plan.shift {
+            state[0x10] = 0x80;
+        }
+        if plan.ctrl {
+            state[0x11] = 0x80;
+        }
+        if plan.alt {
+            state[0x12] = 0x80;
+        }
+        let scan = MapVirtualKeyExW(plan.vk as u32, MAPVK_VK_TO_VSC, hkl);
+        let mut buf = [0u16; 8];
+        let n = ToUnicodeEx(plan.vk as u32, scan, &state, &mut buf, 0, hkl);
+        let empty = [0u8; 256];
+        let mut buf2 = [0u16; 8];
+        let _ = ToUnicodeEx(SPACE_VIRTUAL_KEY as u32, 0x39, &empty, &mut buf2, 0, hkl);
+        n < 0
     }
 }
 
@@ -260,6 +295,9 @@ pub fn send_glyph(ch: char) -> Result<(), String> {
             }
         }
         tap_plan(plan);
+        if plan_is_dead_key(plan) {
+            vk_tap(SPACE_VIRTUAL_KEY);
+        }
         return Ok(());
     }
     if let Some(lower) = umlaut_lower(glyph) {
@@ -286,6 +324,7 @@ pub fn send_glyph(_ch: char) -> Result<(), String> {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn send_glyphs_batch(chars: &[char]) -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,

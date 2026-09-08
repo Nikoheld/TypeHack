@@ -5,6 +5,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use serde_json::json;
+use thirtyfour::extensions::cdp::ChromeDevTools;
 use thirtyfour::prelude::*;
 
 use typehack::keys::{
@@ -14,7 +16,9 @@ use typehack::nav::{
     is_achievement_click_target, is_achievement_dialog, is_captcha_view, is_dashboard_url, is_start_button,
     is_start_dialog, OVERVIEW_PATH,
 };
-use typehack::prompt::{first_remaining_glyph, pick_remaining_prompt, PROMPT_SELECTORS};
+use typehack::prompt::{
+    first_remaining_glyph, glyph_was_consumed, pick_remaining_prompt, PROMPT_SELECTORS,
+};
 
 const LOGIN_PATH: &str = "/index.php?r=site/login";
 
@@ -54,6 +58,72 @@ for (var i = 0; i < sels.length; i++) {
   } catch (x) {}
 }
 return htmls;
+"#;
+
+/// Layout-independent insert: hidden input + keyup/input + jQuery (typewriter.at).
+const JS_SEND_GLYPH: &str = r#"
+var ch = String(arguments[0] || '');
+if (!ch) return false;
+if (typeof setFocusMobileText === 'function') { try { setFocusMobileText(); } catch (x) {} }
+var which = (ch === ' ' || ch === '\xa0') ? 32 : ch.charCodeAt(0);
+var key = (ch === ' ' || ch === '\xa0') ? ' ' : ch;
+var code = (key === ' ') ? 'Space' : '';
+function fire(target, type) {
+  if (!target || !target.dispatchEvent) return;
+  var init = {
+    key: key, code: code, bubbles: true, cancelable: true, composed: true,
+    keyCode: which, which: which, charCode: type === 'keypress' ? which : 0,
+    view: window
+  };
+  var ev;
+  try { ev = new KeyboardEvent(type, init); } catch (e) { return; }
+  try {
+    Object.defineProperty(ev, 'keyCode', {get: function(){return which;}});
+    Object.defineProperty(ev, 'which', {get: function(){return which;}});
+    Object.defineProperty(ev, 'key', {get: function(){return key;}});
+  } catch (e) {}
+  target.dispatchEvent(ev);
+}
+var el = document.activeElement;
+if (!el || el === document.body || el === document.documentElement) {
+  var nodes = document.querySelectorAll('input,textarea');
+  for (var i = 0; i < nodes.length; i++) {
+    var e = nodes[i];
+    var tp = (e.type || '').toLowerCase();
+    if (tp === 'password' || tp === 'hidden' || tp === 'submit' || tp === 'button') continue;
+    if (/login|user|email|pass/i.test((e.id || '') + ' ' + (e.name || ''))) continue;
+    try { e.focus({preventScroll: true}); el = e; break; } catch (x) {}
+  }
+}
+try {
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+    el.focus();
+    try { document.execCommand('insertText', false, key); } catch (x) {}
+    try {
+      el.dispatchEvent(new InputEvent('beforeinput', {bubbles: true, cancelable: true, inputType: 'insertText', data: key}));
+      el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: key}));
+    } catch (x) {
+      el.dispatchEvent(new Event('input', {bubbles: true}));
+    }
+  }
+} catch (x) {}
+var nodes = [el, document.getElementById('text_todo_1'), document.body, document];
+var seen = [];
+nodes.forEach(function(n) {
+  if (!n || seen.indexOf(n) >= 0) return;
+  seen.push(n);
+  fire(n, 'keydown'); fire(n, 'keypress'); fire(n, 'keyup');
+});
+if (window.jQuery) {
+  ['keydown','keypress','keyup'].forEach(function(type) {
+    var je = jQuery.Event(type);
+    je.which = which; je.keyCode = which; je.charCode = which; je.key = key;
+    jQuery(document).trigger(je);
+    jQuery('body').trigger(je);
+    jQuery('#text_todo_1').trigger(je);
+  });
+}
+return true;
 "#;
 
 pub struct BrowserSession {
@@ -153,8 +223,7 @@ impl BrowserSession {
             .await
             .ok_or_else(|| "Tipptext ist leer".to_string())?;
         let ch = first_remaining_glyph(&before).map_err(|e| e.0)?;
-        send_glyph(ch)?;
-        let now = remaining_now(&self.driver).await.unwrap_or(before);
+        let now = self.deliver_glyph(ch, &before).await?;
         Ok((ch, now.clone(), now.chars().count()))
     }
 
@@ -183,12 +252,36 @@ impl BrowserSession {
         if let Ok(mut last) = self.last_burst.lock() {
             *last = Some((before.clone(), Instant::now()));
         }
-        // Short drain wait, not a Selenium poll loop. 50-char line + 20 ms still ≫ 100000/10 min.
-        let wait_ms = (2 + glyphs.len() / 8).min(20) as u64;
-        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
-        let now = remaining_now(&self.driver).await.unwrap_or_default();
+        tokio::time::sleep(Duration::from_millis((2 + glyphs.len() / 8).min(20) as u64)).await;
+        let mut now = remaining_now(&self.driver).await.unwrap_or_default();
+        // OS keys miss ß, dead keys, AltGr on some layouts — finish leftovers via JS/CDP.
+        let leftover = typehack::glyphs_to_type(&now);
+        if !leftover.is_empty() && leftover.len() <= glyphs.len() {
+            for ch in leftover {
+                now = self.deliver_glyph(ch, &now).await.unwrap_or(now);
+                if now.is_empty() {
+                    break;
+                }
+            }
+        }
         let n = now.chars().count();
         Ok((glyphs.len(), now, n))
+    }
+
+    async fn deliver_glyph(&self, ch: char, before: &str) -> Result<String, String> {
+        send_glyph(ch)?;
+        let mut now = remaining_now(&self.driver).await.unwrap_or_else(|| before.to_string());
+        if glyph_was_consumed(before, &now, ch) {
+            return Ok(now);
+        }
+        let _ = js_send_glyph(&self.driver, ch).await;
+        now = remaining_now(&self.driver).await.unwrap_or(now);
+        if glyph_was_consumed(before, &now, ch) {
+            return Ok(now);
+        }
+        let _ = cdp_send_glyph(&self.driver, ch).await;
+        now = remaining_now(&self.driver).await.unwrap_or(now);
+        Ok(now)
     }
 
     pub async fn quit(mut self) {
@@ -235,6 +328,53 @@ async fn launch_on_port(driver_path: &Path, port: u16) -> Result<BrowserSession,
             Err(format!("WebDriver: {e}"))
         }
     }
+}
+
+async fn js_send_glyph(driver: &WebDriver, ch: char) -> Result<(), String> {
+    let glyph = typehack::keys_for_char(ch).to_string();
+    driver
+        .execute(JS_SEND_GLYPH, vec![serde_json::Value::String(glyph)])
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("js: {e}"))
+}
+
+async fn cdp_send_glyph(driver: &WebDriver, ch: char) -> Result<(), String> {
+    let info = typehack::glyph_payload(ch);
+    let dt = ChromeDevTools::new(driver.handle.clone());
+    let key = info.key.clone();
+    let text = info.insert_text.clone();
+    let vk = u32::from(info.vk);
+    let down = json!({
+        "type": "keyDown",
+        "key": key,
+        "text": text,
+        "unmodifiedText": text,
+        "windowsVirtualKeyCode": vk,
+        "nativeVirtualKeyCode": vk,
+    });
+    let chr = json!({
+        "type": "char",
+        "key": key,
+        "text": text,
+        "unmodifiedText": text,
+    });
+    let up = json!({
+        "type": "keyUp",
+        "key": key,
+        "windowsVirtualKeyCode": vk,
+        "nativeVirtualKeyCode": vk,
+    });
+    dt.execute_cdp_with_params("Input.dispatchKeyEvent", down)
+        .await
+        .map_err(|e| format!("cdp: {e}"))?;
+    dt.execute_cdp_with_params("Input.dispatchKeyEvent", chr)
+        .await
+        .map_err(|e| format!("cdp: {e}"))?;
+    dt.execute_cdp_with_params("Input.dispatchKeyEvent", up)
+        .await
+        .map_err(|e| format!("cdp: {e}"))?;
+    Ok(())
 }
 
 async fn remaining_now(driver: &WebDriver) -> Option<String> {

@@ -67,6 +67,20 @@ pub fn first_remaining_glyph(text: &str) -> Result<char, PromptError> {
         .ok_or_else(|| PromptError("Tipptext ist leer".into()))
 }
 
+/// True if `ch` no longer sits at the front of the remaining prompt.
+pub fn glyph_was_consumed(before: &str, after: &str, ch: char) -> bool {
+    let want = keys_for_char(ch);
+    if after == before {
+        return false;
+    }
+    let before_n = before.chars().count();
+    let after_n = after.chars().count();
+    if after_n < before_n {
+        return true;
+    }
+    first_remaining_glyph(after) != Ok(want)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlyphPayload {
     pub glyph: char,
@@ -253,6 +267,23 @@ fn decode_entities(raw: &str) -> String {
             "&acirc;" => out.push('â'),
             "&ccedil;" => out.push('ç'),
             "&euro;" => out.push('€'),
+            "&sect;" => out.push('§'),
+            "&deg;" => out.push('°'),
+            "&laquo;" => out.push('«'),
+            "&raquo;" => out.push('»'),
+            "&ndash;" => out.push('–'),
+            "&mdash;" => out.push('—'),
+            "&hellip;" => out.push('…'),
+            "&copy;" => out.push('©'),
+            "&reg;" => out.push('®'),
+            "&times;" => out.push('×'),
+            "&divide;" => out.push('÷'),
+            "&plusmn;" => out.push('±'),
+            "&micro;" => out.push('µ'),
+            "&pound;" => out.push('£'),
+            "&yen;" => out.push('¥'),
+            "&iexcl;" => out.push('¡'),
+            "&iquest;" => out.push('¿'),
             other if other.starts_with("&#x") || other.starts_with("&#X") => {
                 let hex = other.trim_start_matches("&#x").trim_start_matches("&#X").trim_end_matches(';');
                 if let Ok(cp) = u32::from_str_radix(hex, 16) {

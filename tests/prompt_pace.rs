@@ -49,9 +49,9 @@ const TODO_AFTER_DONE_PARENT: &str = concat!(
 );
 
 #[test]
-fn version_is_3_1_3() {
-    assert_eq!(VERSION, "3.1.3");
-    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.3");
+fn version_is_3_1_4() {
+    assert_eq!(VERSION, "3.1.4");
+    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.4");
 }
 
 #[test]
@@ -330,6 +330,14 @@ fn html_named_umlaut_entities() {
     );
     assert_eq!(extract_prompt_from_html(html), "Öäüß");
     assert_eq!(glyphs_to_type("Öäüß"), vec!['Ö', 'ä', 'ü', 'ß']);
+}
+
+#[test]
+fn any_glyph_is_consumed_when_remaining_shrinks() {
+    assert!(!glyph_was_consumed("ßabc", "ßabc", 'ß'));
+    assert!(glyph_was_consumed("ßabc", "abc", 'ß'));
+    assert!(glyph_was_consumed("  x", " x", ' '));
+    assert!(!glyph_was_consumed("hello", "hello", 'h'));
 }
 
 #[test]

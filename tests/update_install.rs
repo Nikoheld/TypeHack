@@ -11,9 +11,9 @@ use typehack::update::{
 use typehack::{is_newer, parse_version, VERSION, WINDOW_TITLE};
 
 #[test]
-fn version_is_3_1_3() {
-    assert_eq!(VERSION, "3.1.3");
-    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.3");
+fn version_is_3_1_4() {
+    assert_eq!(VERSION, "3.1.4");
+    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.4");
 }
 
 #[test]

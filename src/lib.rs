@@ -25,8 +25,8 @@ pub use pace::{
     MAX_SPEED_MIN_STROKES, STROKES_DEFAULT, STROKES_MAX, STROKES_MIN,
 };
 pub use prompt::{
-    extract_prompt_from_html, first_remaining_glyph, glyph_payload, glyphs_to_type, keys_for_char,
-    normalize_prompt_text, pick_remaining_prompt, PromptError, PROMPT_SELECTORS,
+    extract_prompt_from_html, first_remaining_glyph, glyph_payload, glyph_was_consumed, glyphs_to_type,
+    keys_for_char, normalize_prompt_text, pick_remaining_prompt, PromptError, PROMPT_SELECTORS,
 };
 pub use version::{is_newer, parse_version, APP_NAME, REPO, VERSION, WINDOW_TITLE};
 pub use update::{digest_from_asset, pick_setup_asset, pick_update_asset, sha256_file, UpdateInfo};
