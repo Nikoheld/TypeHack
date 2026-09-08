@@ -67,6 +67,17 @@ pub fn first_remaining_glyph(text: &str) -> Result<char, PromptError> {
         .ok_or_else(|| PromptError("Tipptext ist leer".into()))
 }
 
+/// Remaining shrank from the front (same lesson). False = new lesson text.
+pub fn remaining_is_progress(prev: &str, now: &str) -> bool {
+    if now.is_empty() {
+        return true;
+    }
+    if prev.is_empty() {
+        return false;
+    }
+    prev.ends_with(now)
+}
+
 /// True if `ch` no longer sits at the front of the remaining prompt.
 pub fn glyph_was_consumed(before: &str, after: &str, ch: char) -> bool {
     let want = keys_for_char(ch);

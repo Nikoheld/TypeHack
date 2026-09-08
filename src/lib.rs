@@ -26,7 +26,8 @@ pub use pace::{
 };
 pub use prompt::{
     extract_prompt_from_html, first_remaining_glyph, glyph_payload, glyph_was_consumed, glyphs_to_type,
-    keys_for_char, normalize_prompt_text, pick_remaining_prompt, PromptError, PROMPT_SELECTORS,
+    keys_for_char, normalize_prompt_text, pick_remaining_prompt, remaining_is_progress, PromptError,
+    PROMPT_SELECTORS,
 };
 pub use version::{is_newer, parse_version, APP_NAME, REPO, VERSION, WINDOW_TITLE};
 pub use update::{digest_from_asset, pick_setup_asset, pick_update_asset, sha256_file, UpdateInfo};

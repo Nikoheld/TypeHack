@@ -49,9 +49,9 @@ const TODO_AFTER_DONE_PARENT: &str = concat!(
 );
 
 #[test]
-fn version_is_3_1_5() {
-    assert_eq!(VERSION, "3.1.5");
-    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.5");
+fn version_is_3_1_6() {
+    assert_eq!(VERSION, "3.1.6");
+    assert_eq!(WINDOW_TITLE, "TypeHack 3.1.6");
 }
 
 #[test]
@@ -338,6 +338,14 @@ fn any_glyph_is_consumed_when_remaining_shrinks() {
     assert!(glyph_was_consumed("ßabc", "abc", 'ß'));
     assert!(glyph_was_consumed("  x", " x", ' '));
     assert!(!glyph_was_consumed("hello", "hello", 'h'));
+}
+
+#[test]
+fn new_lesson_remaining_is_not_progress() {
+    assert!(remaining_is_progress("Hallo Welt", "allo Welt"));
+    assert!(remaining_is_progress("Hallo", ""));
+    assert!(!remaining_is_progress("Hallo Welt", "Die Katze"));
+    assert!(!remaining_is_progress("", "Die Katze"));
 }
 
 #[test]

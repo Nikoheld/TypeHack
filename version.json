@@ -1,5 +1,5 @@
 {
-  "version": "3.1.5",
+  "version": "3.1.6",
   "runtime": "rust",
   "notes": "ÄÖÜ on Swiss/German layouts (Caps Lock umlauts, HTML entities)."
 }

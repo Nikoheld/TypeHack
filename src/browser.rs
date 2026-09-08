@@ -17,7 +17,7 @@ use typehack::nav::{
     is_start_dialog, OVERVIEW_PATH,
 };
 use typehack::prompt::{
-    first_remaining_glyph, glyph_was_consumed, pick_remaining_prompt, PROMPT_SELECTORS,
+    first_remaining_glyph, glyph_was_consumed, pick_remaining_prompt, remaining_is_progress, PROMPT_SELECTORS,
 };
 
 const LOGIN_PATH: &str = "/index.php?r=site/login";
@@ -199,6 +199,9 @@ impl BrowserSession {
 
     /// One remaining glyph. Does not sleep for pace — the caller owns the wall-clock schedule.
     pub async fn type_one(&self) -> Result<(char, String, usize), String> {
+        if self.hold_for_start_dialog().await {
+            return Err("Start-Dialog".into());
+        }
         focus_typer(&self.driver).await;
         let before = remaining_now(&self.driver)
             .await
@@ -214,6 +217,10 @@ impl BrowserSession {
     /// caller waits instead of typing it twice. Retries after 80 ms if keys missed.
     pub async fn type_line_max(&self) -> Result<(usize, String, usize), String> {
         force_foreground_typewriter();
+        if self.hold_for_start_dialog().await {
+            let now = remaining_now(&self.driver).await.unwrap_or_default();
+            return Ok((0, now.clone(), now.chars().count()));
+        }
         let before = remaining_now(&self.driver)
             .await
             .ok_or_else(|| "Tipptext ist leer".to_string())?;
@@ -223,9 +230,18 @@ impl BrowserSession {
         }
         {
             let last = self.last_burst.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((text, t0)) = last.as_ref() {
-                // Page needs time to eat the burst. Retyping the same line = mass errors.
-                if text == &before && t0.elapsed() < Duration::from_millis(250) {
+            if let Some((text, _)) = last.as_ref() {
+                if text == &before {
+                    // Already dumped this remaining. Wait until the lesson eats it.
+                    return Ok((0, before.clone(), before.chars().count()));
+                }
+                if !remaining_is_progress(text, &before) {
+                    // New lesson text while Start Typing is still on.
+                    drop(last);
+                    let _ = self.hold_for_start_dialog().await;
+                    if let Ok(mut g) = self.last_burst.lock() {
+                        *g = None;
+                    }
                     return Ok((0, before.clone(), before.chars().count()));
                 }
             }
@@ -262,6 +278,18 @@ impl BrowserSession {
         let _ = js_send_glyph(&self.driver, ch).await;
         tokio::time::sleep(Duration::from_millis(16)).await;
         Ok(remaining_now(&self.driver).await.unwrap_or_else(|| before.to_string()))
+    }
+
+    /// If the start overlay is up, close it and skip typing this tick.
+    async fn hold_for_start_dialog(&self) -> bool {
+        if !start_dialog_open(&self.driver).await {
+            return false;
+        }
+        if let Ok(mut g) = self.last_burst.lock() {
+            *g = None;
+        }
+        dismiss_start_dialog(&self.driver).await;
+        true
     }
 
     pub async fn quit(mut self) {
@@ -592,7 +620,7 @@ async fn dismiss_start_dialog(driver: &WebDriver) {
     while Instant::now() < deadline && start_dialog_open(driver).await {
         tokio::time::sleep(Duration::from_millis(40)).await;
     }
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    tokio::time::sleep(Duration::from_millis(220)).await;
 }
 
 
